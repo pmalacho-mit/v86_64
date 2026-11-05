@@ -183,6 +183,14 @@ const expected = [
     0x111111112222DDDDn, // 148: xchg r8w, ax (66 41 90): rax
     0xBBBBBBBBCCCC3333n, // 149: xchg r8w, ax (66 41 90): r8
     0x1111111122223333n, // 150: 66 90 is a nop
+    0x40005n,            // 151: lock xadd m64 restarted after a write #PF: memory
+    5n,                  // 152: ... rax is the old value
+    0n,                  // 153: lock cmpxchg m64 (unequal) after a write #PF: memory unchanged
+    0n,                  // 154: ... rax loaded with the old value
+    0n,                  // 155: ... ZF clear
+    7n,                  // 156: lock cmpxchg m64 (equal) after a write #PF: memory
+    5n,                  // 157: ... rax
+    1n,                  // 158: ... ZF set
 ];
 
 const emulator = new V86({
