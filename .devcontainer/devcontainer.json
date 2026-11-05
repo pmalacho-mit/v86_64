@@ -1,30 +1,70 @@
+// Development container for the v86_64 fork (https://github.com/portlandhodl/v86_64),
+// for working on it from an Apple Silicon Mac: desolate / colima runs this natively
+// as linux/arm64. Replaces the fork's own .devcontainer, which forces linux/amd64
+// and would emulate x86 for everything, including Rust compiles.
+//
+// What it gives you (see post-create.sh):
+//   make all / make all-debug        Rust (wasm32 target), clang + lld, Java 21 (Closure Compiler), Node 24
+//   ./tools/serve.mjs --port 8000    the test pages (forwarded port 8000)
+//   make api-tests                   incl. tests/api/state.js (save/restore)
+//   make longmode-tests              64-bit guests; tests/longmode/alpine.js with $ALPINE_ISO
+//   make rust-test, make tests, make expect-tests, make devices-test
+//   make qemutests, make jitpagingtests   need 32-bit x86 test programs: on arm64,
+//                                    pass CC=i686-linux-gnu-gcc (cross compiler installed)
+//
+// What it can't run on an ARM host: `make nasmtests` (and -force-jit). They run
+// x86 programs natively under gdb to record the expected results, which needs a
+// real x86 CPU. The fork's CI (GitHub's x86 runners) runs them on every push.
+//
+// Uses "image" + features rather than a Dockerfile, so it also works in
+// proxied/isolated setups that need to derive a CA-trusting base image.
 {
-	"name": "v86 dev container",
-	"build": {
-		"dockerfile": "Dockerfile",
-		"args": {
-			"VARIANT": "ubuntu"
-		},
-		"options": [
-			"--platform", "linux/amd64"
-		]
-	},
-	"features": {
-		"ghcr.io/jungaretti/features/ripgrep:1": {}
-	},
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"ms-azuretools.vscode-docker",
-				"yzhang.markdown-all-in-one",
-				"DavidAnson.vscode-markdownlint",
-				"christian-kohler.npm-intellisense",
-				"dbaeumer.vscode-eslint",
-				"dustypomerleau.rust-syntax",
-				"serayuzgur.crates",
-				"ms-vscode.makefile-tools",
-				"rust-lang.rust-analyzer"
-			]
-		}
-	}
+  "name": "v86_64",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24-trixie",
+
+  "features": {
+    // Rust stable. wasm32 for the emulator; the two musl targets for the
+    // tests/api/memhog payloads (linked with Rust's bundled rust-lld).
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "profile": "minimal",
+      "targets": "wasm32-unknown-unknown,i686-unknown-linux-musl,x86_64-unknown-linux-musl",
+      "components": "rustfmt,clippy"
+    },
+	"ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // tools/serve.mjs (static server with range requests) for index.html, debug.html, examples/
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "v86 test pages (./tools/serve.mjs --port 8000)", "onAutoForward": "notify" }
+  },
+
+  // Release builds (Closure Compiler, wasm-opt-free cargo --release) and the
+  // Alpine x86_64 test guest (512 MiB) want a few GB of RAM.
+  "hostRequirements": { "cpus": 4, "memory": "8gb", "storage": "16gb" },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "dbaeumer.vscode-eslint",
+        "ms-vscode.makefile-tools",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        // build/ and closure-compiler/ are generated; images/ holds multi-GB ISOs.
+        "files.watcherExclude": { "**/build/**": true, "**/closure-compiler/**": true, "**/images/**": true, "**/node_modules/**": true },
+        "search.exclude": { "**/build": true, "**/closure-compiler": true, "**/images": true },
+        "rust-analyzer.cargo.target": "wasm32-unknown-unknown"
+      }
+    },
+    // desolate (isolated devcontainers): forwarded port and memory.
+    "desolate": {
+      "ports": [8000],
+      "memory": "8g"
+    }
+  }
 }
