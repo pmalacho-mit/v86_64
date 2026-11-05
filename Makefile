@@ -484,6 +484,8 @@ tests/api/memhog tests/api/memhog64: tests/api/memhog.rs
 api-tests: build/v86-debug.wasm
 	./tests/api/clean-shutdown.js
 	./tests/api/state.js
+	./tests/longmode/state64.js
+	DISABLE_JIT=1 ./tests/longmode/state64.js
 	./tests/api/reset.js
 	./tests/api/floppy.js
 	./tests/api/parallel.js
