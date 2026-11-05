@@ -1,0 +1,81 @@
+name: Release
+
+# Builds (without running the test suite) and publishes the artifact and the
+# "latest" prerelease. Independent of the CI workflow, so CI can be disabled
+# in the GitHub UI without affecting this. Run it manually from the Actions
+# tab (or `gh workflow run release.yml --ref master`).
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Build and upload release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/master'
+
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: tree:0
+
+      - name: Setup Node.js version
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.17.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+
+      - name: Build all
+        run: make all
+
+      - name: Build fallback
+        run: make build/v86-fallback.wasm
+
+      - name: Update package.json version
+        run: make update-package-json-version
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: v86
+          path: |
+            package.json
+            LICENSE
+            Readme.md
+            v86.d.ts
+            build/libv86*.js
+            build/libv86*.js.map
+            build/v86*.wasm
+            build/*.mjs
+
+      - name: Delete old release and tag
+        uses: dev-drprasad/delete-tag-and-release@v1.0.1
+        with:
+          delete_release: true
+          tag_name: latest
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release to GitHub
+        uses: ncipollo/release-action@v1
+        with:
+          name: Latest Release
+          tag: latest
+          commit: master
+          body: ${{ github.sha }}
+          artifacts: "build/libv86*.js,build/libv86*.js.map,build/*.mjs,build/v86*.wasm"
+          prerelease: true
+
+      - name: Release to NPM
+        run: npm publish --provenance --access public
+        if: github.repository == 'copy/v86'
