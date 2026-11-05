@@ -229,6 +229,27 @@ export function CPU(bus, wm, stop_idling)
     this.efer = view(Uint32Array, memory, 296, 2);
     this.pat = view(Uint32Array, memory, 1288, 2);
 
+    // 64-bit CPU state (see src/rust/cpu/global_pointers.rs); saved by get_state
+    // under state[99..] (see CPU_STATE64_FIELDS)
+    this.last_op1_64 = view(Uint32Array, memory, 280, 2);
+    this.last_result_64 = view(Uint32Array, memory, 288, 2);
+    this.star = view(Uint32Array, memory, 304, 2);
+    this.lstar = view(Uint32Array, memory, 312, 2);
+    this.cstar = view(Uint32Array, memory, 320, 2);
+    this.sfmask = view(Uint32Array, memory, 328, 2);
+    this.fs_base = view(Uint32Array, memory, 336, 2);
+    this.gs_base = view(Uint32Array, memory, 344, 2);
+    this.kernel_gs_base = view(Uint32Array, memory, 352, 2);
+    this.cr2_64 = view(Uint32Array, memory, 384, 2);
+    this.idtr_offset64 = view(Uint32Array, memory, 392, 2);
+    this.gdtr_offset64 = view(Uint32Array, memory, 400, 2);
+    this.sysenter_esp64 = view(Uint32Array, memory, 408, 2);
+    this.sysenter_eip64 = view(Uint32Array, memory, 416, 2);
+    this.misc_enable = view(Uint32Array, memory, 424, 2);
+    this.nmi_flags = view(Uint8Array, memory, 432, 2); // nmi_pending, nmi_blocked
+    this.cr3_high = view(Uint32Array, memory, 440, 1);
+    this.tss_base64 = view(Uint32Array, memory, 456, 2);
+
     this.svga_dirty_bitmap_min_offset = view(Uint32Array, memory, 716, 1);
     this.svga_dirty_bitmap_max_offset = view(Uint32Array, memory, 720, 1);
 
@@ -549,6 +570,18 @@ CPU.prototype.jit_clear_all_funcs = function()
     }
 };
 
+// [state index, CPU property]. Indices 0-98 are taken. Missing in older state images.
+// (high_memory_size is deliberately not saved: it's configuration of the mem64 build)
+const CPU_STATE64_FIELDS = [
+    [99, "idtr_offset64"], [100, "gdtr_offset64"], [101, "tss_base64"],
+    [102, "fs_base"], [103, "gs_base"], [104, "kernel_gs_base"],
+    [105, "star"], [106, "lstar"], [107, "cstar"], [108, "sfmask"],
+    [109, "sysenter_esp64"], [110, "sysenter_eip64"],
+    [111, "cr2_64"], [112, "cr3_high"],
+    [113, "last_op1_64"], [114, "last_result_64"],
+    [115, "misc_enable"], [116, "nmi_flags"],
+];
+
 CPU.prototype.get_state = function()
 {
     var state = [];
@@ -681,6 +714,11 @@ CPU.prototype.get_state = function()
     state[93] = this.pat;
     state[98] = this.devices.virtio_gpu;
 
+    for(const [index, name] of CPU_STATE64_FIELDS)
+    {
+        state[index] = this[name];
+    }
+
     return state;
 };
 
@@ -811,6 +849,27 @@ CPU.prototype.set_state = function(state)
     this.pat.set(state[93] || [0x00070406, 0x00070406]);
     this.efer.fill(0);
     state[92] && this.efer.set(state[92]);
+
+    // 64-bit state; older images lack it: derive from the low-half mirrors, zero otherwise
+    for(const [index, name] of CPU_STATE64_FIELDS)
+    {
+        this[name].fill(0);
+        state[index] && this[name].set(state[index]);
+    }
+    if(!state[99])
+    {
+        this.idtr_offset64[0] = this.idtr_offset[0];
+        this.gdtr_offset64[0] = this.gdtr_offset[0];
+    }
+    if(!state[109])
+    {
+        this.sysenter_esp64[0] = this.sysenter_esp[0];
+        this.sysenter_eip64[0] = this.sysenter_eip[0];
+    }
+    if(!state[111])
+    {
+        this.cr2_64[0] = this.cr[2];
+    }
 
     this.set_tsc(state[43][0], state[43][1]);
 
