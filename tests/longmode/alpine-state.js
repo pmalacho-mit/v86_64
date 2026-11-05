@@ -78,6 +78,7 @@ async function run_command(emulator, n)
     output = "";
     const done = wait_for(emulator, /ARCH=(\S+) SUM=(\d+) LS=(\d+)\r?\n/);
     // uname and ls are user-space programs, so they make system calls
+    console.log(`[*] Running command ${n} (${elapsed()})`);
     emulator.serial0_send(`echo ARCH=$(uname -m) SUM=$((40+${n})) LS=$(ls / | wc -l)\n`);
     const m = await done;
     if(m[1] !== "x86_64" || +m[2] !== 40 + n || +m[3] < 5)
@@ -100,6 +101,9 @@ console.log(`[+] Saved state (${(state.byteLength / 1048576).toFixed(0)} MB)`);
 // restore into a fresh emulator
 await emulator.stop();
 const restored = new V86({ ...config, initial_state: { buffer: state } });
+// the state is restored asynchronously; keystrokes sent before that are lost
+await new Promise(resolve => restored.add_listener("emulator-loaded", resolve));
+console.log(`[+] State loaded into fresh emulator (${elapsed()})`);
 await run_command(restored, 3);
 console.log(`[+] Fresh emulator with initial_state works (${elapsed()})`);
 
