@@ -407,6 +407,9 @@ longmode-tests: build/v86-debug.wasm
 	JIT_THRESHOLD=1 JIT32_CHAINING=0 ./tests/longmode/run.js
 	./tests/longmode/multiboot64.js
 	./tests/longmode/selfipi.js
+	./tests/longmode/state64.js
+	DISABLE_JIT=1 ./tests/longmode/state64.js
+	./tests/longmode/alpine-state.js
 	JIT64_CHAINING=0 ./tests/longmode/selfipi.js
 
 jitpagingtests: build/v86-debug.wasm
@@ -481,6 +484,8 @@ tests/api/memhog tests/api/memhog64: tests/api/memhog.rs
 api-tests: build/v86-debug.wasm
 	./tests/api/clean-shutdown.js
 	./tests/api/state.js
+	./tests/longmode/state64.js
+	DISABLE_JIT=1 ./tests/longmode/state64.js
 	./tests/api/reset.js
 	./tests/api/floppy.js
 	./tests/api/parallel.js
