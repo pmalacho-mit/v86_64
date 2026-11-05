@@ -405,6 +405,9 @@ longmode-tests: build/v86-debug.wasm
 	JIT_THRESHOLD=1 ./tests/longmode/run.js
 	JIT_THRESHOLD=1 JIT64_CHAINING=0 ./tests/longmode/run.js
 	JIT_THRESHOLD=1 JIT32_CHAINING=0 ./tests/longmode/run.js
+	./tests/longmode/restart.js
+	JIT_THRESHOLD=1 ./tests/longmode/restart.js
+	JIT_THRESHOLD=1 JIT64_CHAINING=0 ./tests/longmode/restart.js
 	./tests/longmode/multiboot64.js
 	./tests/longmode/selfipi.js
 	JIT64_CHAINING=0 ./tests/longmode/selfipi.js

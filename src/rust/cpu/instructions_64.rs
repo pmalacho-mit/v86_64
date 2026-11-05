@@ -125,11 +125,11 @@ pub unsafe fn instr64_0F01_3_mem(addr: u64) {
 }
 pub unsafe fn instr64_0F01_3_reg(_a0: i32) { trigger_ud(); }
 pub unsafe fn instr64_0F01_4_mem(addr: u64) {
-    crate::cpu::instructions_0f::instr32_0F01_4_mem(addr)
+    crate::cpu::instructions_0f::instr16_0F01_4_mem(addr)
 }
 pub unsafe fn instr64_0F01_4_reg(_a0: i32) { trigger_ud(); }
 pub unsafe fn instr64_0F01_6_mem(addr: u64) {
-    crate::cpu::instructions_0f::instr32_0F01_6_mem(addr)
+    crate::cpu::instructions_0f::instr16_0F01_6_mem(addr)
 }
 pub unsafe fn instr64_0F01_6_reg(_a0: i32) { trigger_ud(); }
 pub unsafe fn instr64_0F01_7_mem(addr: u64) {
