@@ -5989,7 +5989,10 @@ pub unsafe fn safe_read_write64(addr: u64, instruction: &dyn Fn(u64) -> u64) {
     let (phys_addr, can_skip_dirty_page) =
         return_on_pagefault!(translate_address_write_and_can_skip_dirty(addr));
     if phys_addr & 0xFFF > 0x1000 - 8 {
-        // crosses a page boundary (cold)
+        // crosses a page boundary (cold). Both pages must be writable before the
+        // instruction runs: it can change registers and flags, and a fault on the
+        // second page must leave them untouched so the restart sees the same state
+        return_on_pagefault!(writable_or_pagefault(addr, 8));
         let x = return_on_pagefault!(safe_read64s(addr));
         let value = instruction(x);
         return_on_pagefault!(safe_write64(addr, value));

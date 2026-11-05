@@ -42,3 +42,5 @@ bench-results
 package-lock.json
 tests/devices/virtio_gpu_kernel.bin
 _site/
+tests/longmode/restart.built.asm
+tests/longmode/restart.bin

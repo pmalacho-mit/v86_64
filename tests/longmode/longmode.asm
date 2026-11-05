@@ -86,7 +86,9 @@ zero_gdt:
 
     ; far jump into 64-bit code segment (32-bit operand in 16-bit segment)
 [bits 16]
-    o32 jmp 0x08:longmode
+    db 0x66, 0xEA                ; jmp ptr16:32 (spelled out: some nasm versions drop o32 here)
+    dd longmode
+    dw 0x08
 
 [bits 64]
 longmode:
@@ -1596,6 +1598,9 @@ pf_handler:
     mov edx, 0x40200000
     cmp r8, rdx
     je t142_demand
+    mov edx, 0x40400000
+    cmp r8, rdx
+    je t151_cow
     ; NX page: store the I/D bit of the error code and resume at a fixed label
     mov r8, [rsp]                ; error code
     shr r8, 4
@@ -1713,7 +1718,59 @@ t142_far:
     mov rax, 0x1111111122223333
     db 0x66, 0x90                    ; without REX.B it stays a nop
     mov [r15 + 150*8], rax           ; 0x1111111122223333
+
+    ; test 151-158: xadd/cmpxchg m64 restart after a write #PF on a present,
+    ; read-only page (PD2[2] -> 2MiB page @phys 0xC00000, P|US|PS). The read
+    ; succeeds, so the register must not change before the write faults.
+%macro t151_ro 1                     ; %1 = initial qword at the page
+    mov dword [abs 0x5010], 0xC00087 ; writable: seed the value
+    mov dword [abs 0x5014], 0
+    invlpg [abs 0x40400000]
+    mov rax, %1
+    mov [abs 0x40400000], rax
+    mov dword [abs 0x5010], 0xC00085 ; read-only
+    invlpg [abs 0x40400000]
+    mov rax, [abs 0x40400000]        ; cache the read-only translation
+%endmacro
+    mov rax, cr0
+    or  rax, 1 << 16                 ; CR0.WP: ring 0 honours read-only pages
+    mov cr0, rax
+    t151_ro 5
+    mov rax, 0x40000
+    lock xadd [abs 0x40400000], rax  ; faults on the write, restarts
+    mov rcx, [abs 0x40400000]
+    mov [r15 + 151*8], rcx           ; 0x40005
+    mov [r15 + 152*8], rax           ; 5
+    t151_ro 0
+    mov rax, 5
+    mov rcx, 7
+    lock cmpxchg [abs 0x40400000], rcx
+    setz dl
+    movzx edx, dl
+    mov [r15 + 155*8], rdx           ; ZF = 0
+    mov rdx, [abs 0x40400000]
+    mov [r15 + 153*8], rdx           ; 0
+    mov [r15 + 154*8], rax           ; 0
+    t151_ro 5
+    mov rax, 5
+    mov rcx, 7
+    lock cmpxchg [abs 0x40400000], rcx
+    setz dl
+    movzx edx, dl
+    mov [r15 + 158*8], rdx           ; ZF = 1
+    mov rdx, [abs 0x40400000]
+    mov [r15 + 156*8], rdx           ; 7
+    mov [r15 + 157*8], rax           ; 5
+    mov rax, cr0
+    and rax, ~(1 << 16)
+    mov cr0, rax
     jmp t142_back
+
+t151_cow:
+    or dword [abs 0x5010], 2         ; RW
+    invlpg [abs 0x40400000]
+    add rsp, 8
+    iretq
 
     ; #PF handler part of test 142: PD2[1] -> 2MiB page @phys 0xA00000 (PD2
     ; was installed by pf_handler.demand)

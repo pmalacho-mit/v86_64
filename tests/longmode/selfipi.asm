@@ -80,7 +80,9 @@ zero_gdt:
     or  eax, 0x80000001          ; CR0.PE|CR0.PG
     mov cr0, eax
 
-    o32 jmp 0x08:longmode
+    db 0x66, 0xEA
+    dd longmode
+    dw 0x08
 
 [bits 64]
 longmode:
