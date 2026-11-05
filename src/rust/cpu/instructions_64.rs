@@ -312,9 +312,7 @@ pub unsafe fn instr64_0FAF_mem(addr: u64, r: i32) {
 pub unsafe fn instr64_0FAF_reg(r1: i32, r: i32) {
     write_reg64(r, imul_reg64(read_reg64(r), read_reg64(r1)));
 }
-pub unsafe fn instr64_0FB1_mem(addr: u64, r: i32) {
-    safe_read_write64(addr, &|x| cmpxchg64(x, r))
-}
+pub unsafe fn instr64_0FB1_mem(addr: u64, r: i32) { safe_read_write64(addr, &|x| cmpxchg64(x, r)) }
 pub unsafe fn instr64_0FB1_reg(r1: i32, r: i32) {
     let v = cmpxchg64(read_reg64(r1), r);
     write_reg64(r1, v);
@@ -414,9 +412,7 @@ pub unsafe fn instr64_0FBF_mem(addr: u64, r: i32) {
 pub unsafe fn instr64_0FBF_reg(r1: i32, r: i32) {
     write_reg64(r, read_reg16(r1) as i16 as i64 as u64);
 }
-pub unsafe fn instr64_0FC1_mem(addr: u64, r: i32) {
-    safe_read_write64(addr, &|x| xadd64(x, r))
-}
+pub unsafe fn instr64_0FC1_mem(addr: u64, r: i32) { safe_read_write64(addr, &|x| xadd64(x, r)) }
 pub unsafe fn instr64_0FC1_reg(r1: i32, r: i32) {
     let source = read_reg64(r);
     write_reg64(r, read_reg64(r1));
