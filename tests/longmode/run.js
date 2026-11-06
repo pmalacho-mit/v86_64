@@ -192,10 +192,10 @@ const expected = [
     5n,                  // 157: ... rax
     1n,                  // 158: ... ZF set
     // 159-162: opcodes invalid in 64-bit mode raise #UD, one bit per encoding (UD64_VARIANT)
-    0x1FFFFFFFFFFn,      // 159: without prefix
-    0x1FFFFFFFFFFn,      // 160: with 66
-    0x1FFFFFFFFFFn,      // 161: with REX (40)
-    0x1FFFFFFFFFFn,      // 162: with REX.W (48)
+    0x1FFFFFFFFFFFn,     // 159: without prefix
+    0x1FFFFFFFFFFFn,     // 160: with 66
+    0x1FFFFFFFFFFFn,     // 161: with REX (40)
+    0x1FFFFFFFFFFFn,     // 162: with REX.W (48)
     3n,                  // 163: compatibility mode runs them (passes that reached the end)
     0n,                  // 164: compatibility mode: eip of a #UD (none)
 ];

@@ -62,7 +62,7 @@ org 0xF0000
 %%ok:
 %endmacro
 
-; all encodings for the prefix variant %1, one bit each (41 bits)
+; all encodings for the prefix variant %1, one bit each (45 bits)
 %macro UD64_VARIANT 1
     UD64 %1, 0, 0x06                    ; push es
     UD64 %1, 1, 0x07                    ; pop es
@@ -103,6 +103,12 @@ org 0xF0000
     UD64 %1, 33 + g, 0x82, 0x00 | g << 3, 0x01      ; ... byte [rax], 1
 %assign g g + 1
 %endrep
+    ; undefined group entries (#UD in every mode) with a displacement, SIB or rip-relative
+    ; operand: the 64-bit jit has to decode them with the analyzer's length
+    UD64 %1, 41, 0xFE, 0x50, 0x10                   ; FE /2 [rax + 0x10]
+    UD64 %1, 42, 0xFE, 0x3C, 0x00                   ; FE /7 [rax + rax]
+    UD64 %1, 43, 0xFF, 0x78, 0x10                   ; FF /7 [rax + 0x10]
+    UD64 %1, 44, 0xFF, 0x3D, 0x00, 0x00, 0x00, 0x00 ; FF /7 [rip]
 %endmacro
 
 [bits 16]
@@ -1871,7 +1877,7 @@ t142_far:
     mov dword [abs UD64_STUB], 0xCCE2FF41           ; jmp r10
     mov rax, 0x0000001000100000         ; m16:32 = 0x10:0x00100000, m16:16 = 0x10:0
     mov [abs UD64_FARPTR], rax
-    mov rax, (1 << 41) - 1
+    mov rax, (1 << 45) - 1
     mov [r15 + 159*8], rax
     mov [r15 + 160*8], rax
     mov [r15 + 161*8], rax
