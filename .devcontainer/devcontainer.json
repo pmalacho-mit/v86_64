@@ -12,9 +12,11 @@
 //   make qemutests, make jitpagingtests   need 32-bit x86 test programs: on arm64,
 //                                    pass CC=i686-linux-gnu-gcc (cross compiler installed)
 //
-// What it can't run on an ARM host: `make nasmtests` (and -force-jit). They run
-// x86 programs natively under gdb to record the expected results, which needs a
-// real x86 CPU. The fork's CI (GitHub's x86 runners) runs them on every push.
+// What it can't do on an ARM host: generate the `make nasmtests` fixtures (and
+// -force-jit). That runs x86 programs natively under gdb to record the expected
+// results, which needs a real x86 CPU (Intel or AMD, no difference). The fork's
+// CI (GitHub's x86 runners) does it on every push and uploads the fixtures;
+// tests/nasm/run.js runs against them on ARM. See docs/testing-aarch64.md.
 //
 // Uses "image" + features rather than a Dockerfile, so it also works in
 // proxied/isolated setups that need to derive a CA-trusting base image.
