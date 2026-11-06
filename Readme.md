@@ -244,12 +244,15 @@ Guest images for `make tests` aren't in the repository:
 mkdir -p images && curl --compressed --output-dir images/ --remote-name-all https://i.copy.sh/{linux.iso,linux3.iso,linux4.iso,buildroot-bzimage68.bin,TinyCore-11.0.iso,oberon.img,msdos.img,openbsd-floppy.img,kolibri.img,windows101.img,os8.img,freedos722.img,mobius-fd-release5.img,msdos622.img}
 ```
 
-See [tests/Readme.md](tests/Readme.md) for more.
+See [tests/Readme.md](tests/Readme.md) for more. On an aarch64 host, see
+[docs/testing-aarch64.md](docs/testing-aarch64.md): nearly everything runs
+natively, but `nasmtests` fixtures must come from an x86 machine.
 
 ## Documentation
 
 - [TODOS.md](TODOS.md): x86-64 roadmap, design and lessons learned
 - [How it works](docs/how-it-works.md) and [Profiling](docs/profiling.md)
+- [Testing on aarch64](docs/testing-aarch64.md): which suites need x86, and nasmtests fixtures
 - [Networking](docs/networking.md) and [dial-up modem networking](docs/modem.md)
 - [9p filesystem](docs/filesystem.md) and [Linux rootfs on 9p](docs/linux-9p-image.md)
 - Guest setup: [Alpine](tools/docker/alpine/), [Arch Linux](docs/archlinux.md),

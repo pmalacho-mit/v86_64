@@ -66,11 +66,16 @@ make nasmtests                     # 32-bit instruction tests vs the host CPU vi
 make nasmtests-force-jit           # the same, forcing JIT compilation
 make longmode-tests                # 64-bit tests: interpreter, JIT_THRESHOLD=1, no chaining,
                                    # ELF64 multiboot, self-IPI
+make fuzz-hw-tests                # 64-bit fuzz cases against the host CPU (tests/fuzz/hw.js)
 make rust-test expect-tests
 make tests                         # guest boots (images: see Readme)
 node tests/kvm-unit-tests/run.mjs tests/kvm-unit-tests/x86/<t>.flat
 ```
 
+- On a non-x86 host, nasmtests fixtures can't be generated trustworthily (gdb
+  has to run the tests on a real x86 CPU). Use fixtures from an x86 machine or
+  the CI artifact, and ask the human to re-run the generator on x86 after
+  adding nasm tests: see [docs/testing-aarch64.md](docs/testing-aarch64.md).
 - nasmtests and longmode-tests need nasm and gdb. Without root access, run
   `apt-get download nasm && dpkg-deb -x nasm_*.deb .` and put the extracted
   `usr/bin` on PATH.
