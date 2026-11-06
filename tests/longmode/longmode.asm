@@ -1593,6 +1593,9 @@ t127_loop:
     dec r10d
     jnz t127_loop
 
+    ; ======== test 198: sysret in compatibility mode code, jitted ========
+    jmp t198_far                     ; out of line: no room left before 0x1F00
+t198_done:
 
     ; set DF before the syscall: r11 must carry it, rflags must lose it
     pushfq
@@ -1999,6 +2002,26 @@ ud_handler:
     and qword [rsp + 16], ~0x10000      ; RF
     iretq
 
+    ; test 198: t198_compat (on its own page, in the 32-bit code segment 0x18 that test 163 put
+    ; in the gdt) has sysret (0F 07) and o16 sysret (66 0F 07) behind conditional jumps that are
+    ; never taken. The 32-bit jit compiles them anyway, as calls of instr32_0F07 and
+    ; instr16_0F07. Issue #15: the core didn't export those, so the module failed to instantiate
+    ; (LinkError) and the emulator died. Three passes, as in test 163, so that the jitted code
+    ; runs too
+t198_far:
+    mov qword [r15 + 198*8], 0
+    mov r8d, 3
+t198_pass:
+    mov r12, rsp
+    push 0x18
+    push t198_compat
+    retfq                               ; to 0x18:t198_compat
+t198_back:
+    mov rsp, r12
+    dec r8d
+    jnz t198_pass
+    jmp t198_done
+
     ; #UD handler of test 163-164 (not expected): store the eip, return to 64-bit code
 compat_ud_handler:
     mov rax, [rsp]
@@ -2057,6 +2080,19 @@ t163_far:
 t163_end:
     inc dword [RESULTS + 163*8]
     jmp 0x08:t163_back                  ; EA, back to 64-bit mode
+
+    ; test 198: compatibility mode code (cs 0x18), on its own page
+    align 0x1000, db 0xCC
+t198_compat:
+    xor eax, eax                        ; ZF set
+    jnz .sysret32                       ; never taken
+    jnz .sysret16                       ; never taken
+    inc dword [RESULTS + 198*8]
+    jmp 0x08:t198_back                  ; EA, back to 64-bit mode
+.sysret32:
+    sysret                              ; 0F 07: instr32_0F07 (not reached)
+.sysret16:
+    o16 sysret                          ; 66 0F 07: instr16_0F07 (not reached)
 
 [bits 16]
     ; reset vector at file offset 0xFFF0

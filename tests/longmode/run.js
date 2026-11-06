@@ -214,6 +214,9 @@ const expected = [
     0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
     0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
     0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
+    // 181-197: taken by other open branches (issue #11: 181-193, issue #16: 194-197)
+    0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    3n,                  // 198: compatibility mode code with sysret, o16 sysret (not taken), passes
 ];
 
 const emulator = new V86({

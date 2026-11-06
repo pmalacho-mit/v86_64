@@ -119,10 +119,12 @@ nasm suite, both variants, after every non-trivial change.
 6. For native JIT code, add it to `gen/generate_jit64.js`. Otherwise the
    instruction is compiled as a call of a generated wrapper around the
    interpreter handler, which is correct but slower.
-   `tests/longmode/jit64-validate.js` compiles every encoding in the table
-   and checks that the generated modules validate (a module the host
-   refuses ends the emulator), but it doesn't run them: the checks in
-   `longmode.asm` do that.
+   `tests/longmode/jit64-validate.js` compiles every encoding in the table,
+   in 64-bit state and with the 16/32-bit jit in 16/32-bit state, and checks
+   that the generated modules validate and instantiate (a module the host
+   refuses ends the emulator; a handler the jit calls by name needs
+   `#[no_mangle]`, or the module fails to link), but it doesn't run them: the
+   checks in `longmode.asm` do that.
 7. Add a check to `tests/longmode/longmode.asm` (store a qword at
    `[r15 + N*8]` and add the expected value in `run.js`).
 

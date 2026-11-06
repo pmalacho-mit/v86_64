@@ -717,8 +717,11 @@ pub unsafe fn instr64_0F07() {
     *instruction_pointer = return_rip;
 }
 
+// exported: the 16/32-bit jit calls these by name (gen_fn0_const), and a module importing a
+// function the core doesn't export fails to instantiate (issue #15)
+#[no_mangle]
 pub unsafe fn instr16_0F07() { instr32_0F07(); }
-
+#[no_mangle]
 pub unsafe fn instr32_0F07() {
     // sysret, 32-bit operand form (no REX.W): return to a compatibility-mode
     // (32-bit) code segment. Only valid in IA-32e mode at cpl 0.

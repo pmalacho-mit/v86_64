@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-// Compiles every opcode of gen/x86_table.js with the 64-bit jit, in many encodings (register and
-// memory operands, operand size and REX prefixes, legacy prefixes), and checks that every
-// generated module validates and instantiates. A module the host refuses ends the emulator with an
-// uncaught CompileError, as in issue #8: the register form of the store-form xmm moves (0F 29,
-// 0F 11, 66 0F 7F, F3 0F 7F with mod=11) pushed the operands of a wasm store in the wrong order.
+// Compiles every opcode of gen/x86_table.js with the 64-bit jit and with the 16/32-bit jit, in many
+// encodings (register and memory operands, operand size and REX prefixes, legacy prefixes), and
+// checks that every generated module validates and instantiates. A module the host refuses ends
+// the emulator with an uncaught error:
+// - a CompileError, as in issue #8: the register form of the store-form xmm moves (0F 29, 0F 11,
+//   66 0F 7F, F3 0F 7F with mod=11) pushed the operands of a wasm store in the wrong order;
+// - a LinkError, as in issue #15: the 16/32-bit jit called sysret (0F 07) as instr16_0F07 and
+//   instr32_0F07, which the core didn't export.
 //
 // The code isn't run: jit_force_generate (debug builds only) compiles the page while the cpu is in
-// 64-bit state, at cpl 0 and at cpl 3. JIT64_VALIDATE_FULL=1 tries more REX/prefix combinations.
+// 64-bit state (at cpl 0 and at cpl 3), in 32-bit state (at cpl 0 and at cpl 3) and in 16-bit
+// state. JIT64_VALIDATE_FULL=1 tries more REX/prefix combinations.
 
 import url from "node:url";
 import path from "node:path";
@@ -33,8 +37,16 @@ const REX_PREFIXES = FULL ?
 const LEGACY_PREFIXES = FULL ?
     [[], [0x66], [0xF3], [0xF2], [0xF0], [0x64], [0x65], [0x67]] :
     [[], [0x66], [0xF3], [0xF2], [0xF0]];
-// 64-bit state at cpl 0, and as in issue #8 (state flags 0x16: cpl 3, 32-bit stack)
-const STATES = [{ cpl: 0, stack_size_32: 0 }, { cpl: 3, stack_size_32: 1 }];
+// 64-bit state at cpl 0, and as in issue #8 (state flags 0x16: cpl 3, 32-bit stack); 32-bit
+// state (protected mode or compatibility mode) at cpl 0 and at cpl 3; 16-bit state. The 16/32-bit
+// states compile with the 16/32-bit jit (gen/generate_jit.js), as in issue #15
+const STATES = [
+    { mode: 64, cpl: 0, stack_size_32: 0 },
+    { mode: 64, cpl: 3, stack_size_32: 1 },
+    { mode: 32, cpl: 0, stack_size_32: 1 },
+    { mode: 32, cpl: 3, stack_size_32: 1 },
+    { mode: 16, cpl: 0, stack_size_32: 0 },
+];
 
 function opcode_bytes(e)
 {
@@ -46,11 +58,11 @@ function opcode_bytes(e)
     return bytes;
 }
 
-function immediate_length(e, operand_size)
+function immediate_length(e, operand_size, address_size)
 {
     let length = 0;
     if(e.imm8 || e.imm8s) length += 1;
-    else if(e.immaddr) length += 8;
+    else if(e.immaddr) length += address_size / 8;
     else if(e.imm16) length += 2;
     else if(e.imm3264 && operand_size === 64) length += 8;
     else if(e.imm1632) length += operand_size === 16 ? 2 : 4;
@@ -60,10 +72,20 @@ function immediate_length(e, operand_size)
     return length;
 }
 
-function modrm_forms(e)
+function modrm_forms(e, address_size)
 {
     const reg = e.fixed_g === undefined ? 2 : e.fixed_g;
-    const forms = [
+    const forms = address_size === 16 ? [
+        [0xC0 | reg << 3 | 1],                                // register
+        [0xC0 | reg << 3 | 4],                                // register (sp/xmm4/...)
+        [0x00 | reg << 3 | 1],                                // [bx+di]
+        [0x40 | reg << 3 | 6, 0x10],                          // [bp+0x10]
+        [0x00 | reg << 3 | 6, 0x00, 0x01],                    // [0x100]
+        [0x44 | reg << 3, 0x08],                              // [si+8]
+        [0x80 | reg << 3, 0x00, 0x02],                        // [bx+si+0x200]
+        [0x00 | reg << 3 | 7],                                // [bx]
+    ] : [
+        // 32/64-bit addressing; mod=00 rm=101 is [rip+disp32] in 64-bit mode, [disp32] otherwise
         [0xC0 | reg << 3 | 1],                                // register
         [0xC0 | reg << 3 | 4],                                // register (rsp/xmm4/...)
         [0x00 | reg << 3 | 1],                                // [rcx]
@@ -80,7 +102,7 @@ function modrm_forms(e)
     return forms;
 }
 
-function* encodings()
+function* encodings(mode)
 {
     for(const e of x86_table)
     {
@@ -91,12 +113,20 @@ function* encodings()
         const legacy_sets = e.sse || mandatory.length ? [[]] : LEGACY_PREFIXES;
         for(const legacy of legacy_sets)
         {
-            for(const rex of REX_PREFIXES)
+            // 40-4F are inc/dec outside of 64-bit mode, not REX prefixes
+            for(const rex of mode === 64 ? REX_PREFIXES : [null])
             {
-                const operand_size = rex !== null && rex & 8 && e.os ? 64 : legacy.includes(0x66) ? 16 : 32;
-                const imm = new Array(immediate_length(e, operand_size)).fill(0x01);
+                const has_66 = legacy.includes(0x66);
+                const operand_size =
+                    mode === 64 ? (rex !== null && rex & 8 && e.os ? 64 : has_66 ? 16 : 32) :
+                    mode === 32 ? (has_66 ? 16 : 32) : (has_66 ? 32 : 16);
+                const has_67 = legacy.includes(0x67);
+                const address_size =
+                    mode === 64 ? (has_67 ? 32 : 64) :
+                    mode === 32 ? (has_67 ? 16 : 32) : (has_67 ? 32 : 16);
+                const imm = new Array(immediate_length(e, operand_size, address_size)).fill(0x01);
                 const prefixes = [...legacy, ...mandatory, ...(rex === null ? [] : [rex])];
-                for(const modrm of e.e ? modrm_forms(e) : [[]])
+                for(const modrm of e.e ? modrm_forms(e, address_size) : [[]])
                 {
                     yield { e, bytes: [...prefixes, ...bytes, ...modrm, ...imm] };
                 }
@@ -160,13 +190,13 @@ let compiled = 0;
 function record_failure(key, bytes, state)
 {
     if(!failures.has(key)) failures.set(key, []);
-    failures.get(key).push(Buffer.from(bytes).toString("hex") + (state.cpl ? " (cpl 3)" : ""));
+    failures.get(key).push(Buffer.from(bytes).toString("hex") + " (" + state.mode + "-bit" + (state.cpl ? ", cpl 3)" : ")"));
 }
 
 async function compile(e, bytes, state)
 {
-    cpu.is_64[0] = 1;
-    cpu.is_32[0] = 0;
+    cpu.is_64[0] = +(state.mode === 64);
+    cpu.is_32[0] = +(state.mode === 32);
     cpu.cpl[0] = state.cpl;
     cpu.stack_size_32[0] = state.stack_size_32;
     cpu.update_state_flags();
@@ -210,7 +240,7 @@ await reset_emulator();
 const start = Date.now();
 for(const state of STATES)
 {
-    for(const { e, bytes } of encodings())
+    for(const { e, bytes } of encodings(state.mode))
     {
         await compile(e, bytes, state);
     }
@@ -220,12 +250,12 @@ emulator.destroy();
 const seconds = ((Date.now() - start) / 1000).toFixed(1);
 if(failures.size === 0)
 {
-    console.log(`[+] All ${cases} jit64 modules validated (${seconds} s)`);
+    console.log(`[+] All ${cases} jit modules (16/32/64-bit state) validated (${seconds} s)`);
     process.exit(0);
 }
 for(const [key, list] of failures)
 {
     console.error(`${key}\n    ${list.length} encodings, e.g. ${list.slice(0, 6).join(", ")}`);
 }
-console.error(`[-] ${failures.size} distinct jit64 module failures in ${cases} encodings (${compiled} compiled)`);
+console.error(`[-] ${failures.size} distinct jit module failures in ${cases} encodings (${compiled} compiled)`);
 process.exit(1);
