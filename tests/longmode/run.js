@@ -230,6 +230,12 @@ const expected = [
     0x0000000000180000n, // 191: jmp m16:64 (REX.W) to compatibility mode
     0x1FFFFFFn,          // 192: far calls/jmps that fault (#GP, #NP, #PF), one bit each
     3n,                  // 193: passes of 181-192
+    0n,                  // 194: unused
+    0n,                  // 195: unused
+    0n,                  // 196: unused
+    0n,                  // 197: unused
+    0n,                  // 198: unused
+    0x7654321n,          // 199: int through IST n runs on the stack of TSS slot n (nibble n - 1)
 ];
 
 const emulator = new V86({

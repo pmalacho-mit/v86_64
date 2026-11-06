@@ -223,6 +223,16 @@ Nothing known hits these.
   the same page.
 - 64-bit call gates aren't implemented: a far call/jmp through one raises
   #GP (`far_jump64`).
+- Interrupt delivery in IA-32e mode (`call_interrupt_vector64`) doesn't align
+  the new RSP down to 16 bytes before pushing the frame (Intel SDM Vol. 3A,
+  "64-Bit Mode Stack Frame"), so the frame is only as aligned as RSP was
+  (an interrupt on the current stack, or an unaligned RSP0/IST pointer).
+- An RSP0/IST pointer beyond the TSS limit raises #TS(0), not #TS with the
+  TSS selector (`get_tss_rsp64`, `get_tss_ist64`).
+- If the frame push of an inter-privilege interrupt faults, CPL is already 0
+  but CS and RSP are still the user's: the nested exception is delivered as
+  intra-privilege onto the user stack instead of switching to RSP0 again (and
+  escalating to #DF).
 - Debug registers: 32-bit addresses only. No I/O breakpoints (CR4.DE), no
   general detect, and the MOV SS/POP SS/STI trap shadow isn't modelled.
 - init.flat: the BIOS warm-resume vector only fires on the INIT path,

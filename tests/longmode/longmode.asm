@@ -2210,13 +2210,11 @@ t181_start:
     mov word [abs T181_GDTR], 10*8 - 1
     mov qword [abs T181_GDTR + 2], 0x800
     lgdt [abs T181_GDTR]
-    ; the TSS: IST1 at 0x24 (v86 reads IST1 from 0x1C, the reserved qword before it, so that has
-    ; the same value), no I/O bitmap
+    ; the TSS: IST1 at 0x24 (0x1C, the reserved qword before it, stays 0), no I/O bitmap
     mov rdi, T181_TSS
     xor eax, eax
     mov ecx, 0x68 / 8
     rep stosq
-    mov qword [abs T181_TSS + 0x1C], T181_ISTACK
     mov qword [abs T181_TSS + 0x24], T181_ISTACK
     mov word [abs T181_TSS + 0x66], 0x68
     mov ax, 0x40
@@ -2377,7 +2375,67 @@ t181_r191:
     mov [abs 0x6000 + 11*16 + 8], rax
     mov [abs 0x6000 + 13*16], rax
     mov [abs 0x6000 + 13*16 + 8], rax
+
+    ; test 199: interrupts through IST1-7 (issue #14). In the 64-bit TSS, IST1-7 are at
+    ; 0x24-0x54 and the qword at 0x1C before them is reserved (Intel SDM Vol. 3A, Figure 8-11).
+    ; Each of the eight slots, the reserved one too, has a stack of its own: slot 0 (0x1C) and
+    ; slots 1-7 (IST1-7) end at T199_STACK + slot * 0x100. int T199_VEC + n - 1 goes through a
+    ; gate with IST n, and nibble n - 1 of the result is the slot of the stack its frame was
+    ; pushed on (0xF: none of them). Uses the TSS of test 181 (TR = 0x40), and the IDT at 0x6000
+    ; with a limit that covers T199_VEC + 6
+%define T199_VEC 0x40
+%define T199_HRSP 0xC000                ; rsp in the handler
+%define T199_IDTR 0xC010
+%define T199_STACK 0xC100
+
+%macro T199_INT 1                       ; int through the gate with IST %1, result in rbx
+    mov qword [abs T199_HRSP], 0
+    int T199_VEC + %1 - 1
+    mov rax, [abs T199_HRSP]
+    add rax, 40 - T199_STACK            ; slot * 0x100: the frame is 5 qwords
+    mov edx, 0xF
+    test al, al
+    jnz %%none
+    shr rax, 8
+    cmp rax, 7
+    ja %%none
+    mov edx, eax
+%%none:
+    shl rdx, 4*(%1 - 1)
+    or rbx, rdx
+%endmacro
+
+%assign t199_slot 0
+%rep 8
+    mov qword [abs T181_TSS + 0x1C + t199_slot*8], T199_STACK + t199_slot*0x100
+%assign t199_slot t199_slot + 1
+%endrep
+%assign t199_ist 1
+%rep 7
+    T181_GATE (T199_VEC + t199_ist - 1), t199_handler, t199_ist
+%assign t199_ist t199_ist + 1
+%endrep
+    mov word [abs T199_IDTR], (T199_VEC + 7)*16 - 1
+    mov qword [abs T199_IDTR + 2], 0x6000
+    lidt [abs T199_IDTR]
+    xor ebx, ebx
+%assign t199_ist 1
+%rep 7
+    T199_INT t199_ist
+%assign t199_ist t199_ist + 1
+%endrep
+    mov [r15 + 199*8], rbx
+
+    lidt [rel idt_ptr]
+    xor eax, eax
+    mov rdi, 0x6000 + T199_VEC*16
+    mov ecx, 7*2
+    rep stosq
     jmp t142_back
+
+t199_handler:
+    mov [abs T199_HRSP], rsp
+    iretq
 
 t151_cow:
     or dword [abs 0x5010], 2         ; RW
