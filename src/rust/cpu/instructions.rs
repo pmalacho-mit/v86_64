@@ -53,12 +53,23 @@ pub unsafe fn instr_04(imm8: i32) { write_reg8(AL, add8(read_reg8(AL), imm8)); }
 pub unsafe fn instr16_05(imm16: i32) { write_reg16(AX, add16(read_reg16(AX), imm16)); }
 pub unsafe fn instr32_05(imm32: i32) { write_reg32(EAX, add32(read_reg32(EAX), imm32)); }
 pub unsafe fn instr16_06() {
+    if trigger_ud_if_64() {
+        return;
+    }
     return_on_pagefault!(push16(*sreg.offset(ES as isize) as i32));
 }
-pub unsafe fn instr32_06() { return_on_pagefault!(push32_sreg(ES)) }
+pub unsafe fn instr32_06() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    return_on_pagefault!(push32_sreg(ES))
+}
 
 #[no_mangle]
 pub unsafe fn instr16_07() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(ES, return_on_pagefault!(safe_read16(get_stack_pointer(0)))) {
         return;
     }
@@ -66,6 +77,9 @@ pub unsafe fn instr16_07() {
 }
 #[no_mangle]
 pub unsafe fn instr32_07() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(
         ES,
         return_on_pagefault!(safe_read32s(get_stack_pointer(0))) & 0xFFFF,
@@ -116,9 +130,17 @@ pub unsafe fn instr16_0D(imm16: i32) { write_reg16(AX, or16(read_reg16(AX), imm1
 pub unsafe fn instr32_0D(imm32: i32) { write_reg32(EAX, or32(read_reg32(EAX), imm32)); }
 
 pub unsafe fn instr16_0E() {
+    if trigger_ud_if_64() {
+        return;
+    }
     return_on_pagefault!(push16(*sreg.offset(CS as isize) as i32));
 }
-pub unsafe fn instr32_0E() { return_on_pagefault!(push32_sreg(CS)) }
+pub unsafe fn instr32_0E() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    return_on_pagefault!(push32_sreg(CS))
+}
 
 pub unsafe fn instr16_0F() { run_instruction0f_16(return_on_pagefault!(read_imm8())); }
 pub unsafe fn instr32_0F() { run_instruction0f_32(return_on_pagefault!(read_imm8())); }
@@ -167,12 +189,23 @@ pub unsafe fn instr16_15(imm16: i32) { write_reg16(AX, adc16(read_reg16(AX), imm
 pub unsafe fn instr32_15(imm32: i32) { write_reg32(EAX, adc32(read_reg32(EAX), imm32)); }
 
 pub unsafe fn instr16_16() {
+    if trigger_ud_if_64() {
+        return;
+    }
     return_on_pagefault!(push16(*sreg.offset(SS as isize) as i32));
 }
-pub unsafe fn instr32_16() { return_on_pagefault!(push32_sreg(SS)) }
+pub unsafe fn instr32_16() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    return_on_pagefault!(push32_sreg(SS))
+}
 
 #[no_mangle]
 pub unsafe fn instr16_17() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(SS, return_on_pagefault!(safe_read16(get_stack_pointer(0)))) {
         return;
     }
@@ -180,6 +213,9 @@ pub unsafe fn instr16_17() {
 }
 #[no_mangle]
 pub unsafe fn instr32_17() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(
         SS,
         return_on_pagefault!(safe_read32s(get_stack_pointer(0))) & 0xFFFF,
@@ -233,12 +269,23 @@ pub unsafe fn instr16_1D(imm16: i32) { write_reg16(AX, sbb16(read_reg16(AX), imm
 pub unsafe fn instr32_1D(imm32: i32) { write_reg32(EAX, sbb32(read_reg32(EAX), imm32)); }
 
 pub unsafe fn instr16_1E() {
+    if trigger_ud_if_64() {
+        return;
+    }
     return_on_pagefault!(push16(*sreg.offset(DS as isize) as i32));
 }
-pub unsafe fn instr32_1E() { return_on_pagefault!(push32_sreg(DS)) }
+pub unsafe fn instr32_1E() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    return_on_pagefault!(push32_sreg(DS))
+}
 
 #[no_mangle]
 pub unsafe fn instr16_1F() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(DS, return_on_pagefault!(safe_read16(get_stack_pointer(0)))) {
         return;
     }
@@ -246,6 +293,9 @@ pub unsafe fn instr16_1F() {
 }
 #[no_mangle]
 pub unsafe fn instr32_1F() {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !switch_seg(
         DS,
         return_on_pagefault!(safe_read32s(get_stack_pointer(0))) & 0xFFFF,
@@ -302,8 +352,7 @@ pub unsafe fn instr_26() { segment_prefix_op(ES); }
 
 #[no_mangle]
 pub unsafe fn instr_27() {
-    if *is_64 {
-        trigger_ud();
+    if trigger_ud_if_64() {
         return;
     }
     bcd_daa();
@@ -356,8 +405,7 @@ pub unsafe fn instr_2E() { segment_prefix_op(CS); }
 
 #[no_mangle]
 pub unsafe fn instr_2F() {
-    if *is_64 {
-        trigger_ud();
+    if trigger_ud_if_64() {
         return;
     }
     bcd_das();
@@ -410,8 +458,7 @@ pub unsafe fn instr_36() { segment_prefix_op(SS); }
 
 #[no_mangle]
 pub unsafe fn instr_37() {
-    if *is_64 {
-        trigger_ud();
+    if trigger_ud_if_64() {
         return;
     }
     bcd_aaa();
@@ -449,8 +496,7 @@ pub unsafe fn instr_3E() { segment_prefix_op(DS); }
 
 #[no_mangle]
 pub unsafe fn instr_3F() {
-    if *is_64 {
-        trigger_ud();
+    if trigger_ud_if_64() {
         return;
     }
     bcd_aas();
@@ -540,22 +586,48 @@ pub unsafe fn instr16_5F() { write_reg16(7 + rex_b(), return_on_pagefault!(pop16
 pub unsafe fn instr32_5F() { write_reg32(7 + rex_b(), return_on_pagefault!(pop32s())); }
 
 #[no_mangle]
-pub unsafe fn instr16_60() { pusha16(); }
+pub unsafe fn instr16_60() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    pusha16();
+}
 #[no_mangle]
-pub unsafe fn instr32_60() { pusha32(); }
+pub unsafe fn instr32_60() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    pusha32();
+}
 #[no_mangle]
-pub unsafe fn instr16_61() { popa16(); }
+pub unsafe fn instr16_61() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    popa16();
+}
 #[no_mangle]
-pub unsafe fn instr32_61() { popa32(); }
+pub unsafe fn instr32_61() {
+    if trigger_ud_if_64() {
+        return;
+    }
+    popa32();
+}
 
 #[no_mangle]
 pub unsafe fn instr_62_reg(_r2: i32, _r: i32) {
-    // bound
+    // bound (in 64-bit mode an EVEX prefix: #UD without AVX-512)
+    if trigger_ud_if_64() {
+        return;
+    }
     dbg_log!("Unimplemented BOUND instruction");
     dbg_assert!(false);
 }
 #[no_mangle]
 pub unsafe fn instr_62_mem(_addr: u64, _r: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
     dbg_log!("Unimplemented BOUND instruction");
     dbg_assert!(false);
 }
@@ -776,22 +848,101 @@ pub unsafe fn instr32_81_7_reg(r: i32, imm: i32) { cmp32(read_reg32(r), imm); }
 pub unsafe fn instr32_81_7_mem(addr: u64, imm: i32) {
     cmp32(return_on_pagefault!(safe_read32s(addr)), imm);
 }
-pub unsafe fn instr_82_0_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| add8(x, imm)) }
-pub unsafe fn instr_82_0_reg(r1: i32, imm: i32) { write_reg8(r1, add8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_1_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| or8(x, imm)) }
-pub unsafe fn instr_82_1_reg(r1: i32, imm: i32) { write_reg8(r1, or8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_2_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| adc8(x, imm)) }
-pub unsafe fn instr_82_2_reg(r1: i32, imm: i32) { write_reg8(r1, adc8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_3_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| sbb8(x, imm)) }
-pub unsafe fn instr_82_3_reg(r1: i32, imm: i32) { write_reg8(r1, sbb8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_4_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| and8(x, imm)) }
-pub unsafe fn instr_82_4_reg(r1: i32, imm: i32) { write_reg8(r1, and8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_5_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| sub8(x, imm)) }
-pub unsafe fn instr_82_5_reg(r1: i32, imm: i32) { write_reg8(r1, sub8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_6_mem(addr: u64, imm: i32) { safe_read_write8(addr, &|x| xor8(x, imm)) }
-pub unsafe fn instr_82_6_reg(r1: i32, imm: i32) { write_reg8(r1, xor8(read_reg8(r1), imm)); }
-pub unsafe fn instr_82_7_reg(r: i32, imm: i32) { cmp8(read_reg8(r), imm); }
+// 82: an alias of 80 that is invalid in 64-bit mode
+pub unsafe fn instr_82_0_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| add8(x, imm))
+}
+pub unsafe fn instr_82_0_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, add8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_1_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| or8(x, imm))
+}
+pub unsafe fn instr_82_1_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, or8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_2_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| adc8(x, imm))
+}
+pub unsafe fn instr_82_2_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, adc8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_3_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| sbb8(x, imm))
+}
+pub unsafe fn instr_82_3_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, sbb8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_4_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| and8(x, imm))
+}
+pub unsafe fn instr_82_4_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, and8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_5_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| sub8(x, imm))
+}
+pub unsafe fn instr_82_5_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, sub8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_6_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    safe_read_write8(addr, &|x| xor8(x, imm))
+}
+pub unsafe fn instr_82_6_reg(r1: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    write_reg8(r1, xor8(read_reg8(r1), imm));
+}
+pub unsafe fn instr_82_7_reg(r: i32, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    cmp8(read_reg8(r), imm);
+}
 pub unsafe fn instr_82_7_mem(addr: u64, imm: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
     cmp8(return_on_pagefault!(safe_read8(addr)), imm);
 }
 pub unsafe fn instr16_83_0_mem(addr: u64, imm: i32) {
@@ -1059,10 +1210,16 @@ pub unsafe fn instr32_99() { write_reg32(EDX, read_reg32(EAX) >> 31); }
 #[no_mangle]
 pub unsafe fn instr16_9A(new_ip: i32, new_cs: i32) {
     // callf
+    if trigger_ud_if_64() {
+        return;
+    }
     far_jump(new_ip, new_cs, true, false);
 }
 #[no_mangle]
 pub unsafe fn instr32_9A(new_ip: i32, new_cs: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
     if !*protected_mode || vm86_mode() {
         if 0 != new_ip as u32 & 0xFFFF0000 {
             dbg_assert!(false);
@@ -1405,22 +1562,43 @@ pub unsafe fn instr32_C3() {
     *instruction_pointer = (cs as u32).wrapping_add(ip as u32) as u64;
 }
 
+// les/lds. The register forms are VEX prefixes, and in 64-bit mode all forms are: #UD without AVX
 #[no_mangle]
 pub unsafe fn instr16_C4_reg(_unused1: i32, _unused2: i32) { trigger_ud(); }
 #[no_mangle]
-pub unsafe fn instr16_C4_mem(addr: u64, r: i32) { lss16(addr, r, ES); }
+pub unsafe fn instr16_C4_mem(addr: u64, r: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    lss16(addr, r, ES);
+}
 #[no_mangle]
 pub unsafe fn instr32_C4_reg(_unused1: i32, _unused2: i32) { trigger_ud(); }
 #[no_mangle]
-pub unsafe fn instr32_C4_mem(addr: u64, r: i32) { lss32(addr, r, ES); }
+pub unsafe fn instr32_C4_mem(addr: u64, r: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    lss32(addr, r, ES);
+}
 #[no_mangle]
 pub unsafe fn instr16_C5_reg(_unused1: i32, _unused2: i32) { trigger_ud(); }
 #[no_mangle]
-pub unsafe fn instr16_C5_mem(addr: u64, r: i32) { lss16(addr, r, DS); }
+pub unsafe fn instr16_C5_mem(addr: u64, r: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    lss16(addr, r, DS);
+}
 #[no_mangle]
 pub unsafe fn instr32_C5_reg(_unused1: i32, _unused2: i32) { trigger_ud(); }
 #[no_mangle]
-pub unsafe fn instr32_C5_mem(addr: u64, r: i32) { lss32(addr, r, DS); }
+pub unsafe fn instr32_C5_mem(addr: u64, r: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    lss32(addr, r, DS);
+}
 
 pub unsafe fn instr_C6_0_reg(r: i32, imm: i32) { write_reg8(r, imm); }
 pub unsafe fn instr_C6_0_mem(addr: u64, imm: i32) {
@@ -1499,6 +1677,9 @@ pub unsafe fn instr_CD(imm8: i32) {
 #[no_mangle]
 pub unsafe fn instr_CE() {
     // INTO
+    if trigger_ud_if_64() {
+        return;
+    }
     dbg_log!("INTO");
     if getof() {
         // TODO: inhibit iopl checks
@@ -1675,14 +1856,23 @@ pub unsafe fn instr32_D3_7_reg(r1: i32) {
 }
 
 #[no_mangle]
-pub unsafe fn instr_D4(arg: i32) { bcd_aam(arg); }
+pub unsafe fn instr_D4(arg: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    bcd_aam(arg);
+}
 #[no_mangle]
-pub unsafe fn instr_D5(arg: i32) { bcd_aad(arg); }
+pub unsafe fn instr_D5(arg: i32) {
+    if trigger_ud_if_64() {
+        return;
+    }
+    bcd_aad(arg);
+}
 #[no_mangle]
 pub unsafe fn instr_D6() {
-    // salc (invalid in 64-bit mode)
-    if *is_64 {
-        trigger_ud();
+    // salc
+    if trigger_ud_if_64() {
         return;
     }
     write_reg8(AL, -(getcf() as i32));
@@ -2139,11 +2329,17 @@ pub unsafe fn instr32_E9(imm32s: i32) {
 #[no_mangle]
 pub unsafe fn instr16_EA(new_ip: i32, cs: i32) {
     // jmpf
+    if trigger_ud_if_64() {
+        return;
+    }
     far_jump(new_ip, cs, false, false);
 }
 #[no_mangle]
 pub unsafe fn instr32_EA(new_ip: i32, cs: i32) {
     // jmpf
+    if trigger_ud_if_64() {
+        return;
+    }
     far_jump(new_ip, cs, false, true);
 }
 

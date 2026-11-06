@@ -303,6 +303,13 @@ Nothing known hits these.
   with `mov [rel x], r64` plus an imm32.
 - **A legacy prefix after REX cancels it.** With several REX prefixes, the
   last one wins.
+- **Without REX.W, 64-bit code runs the 16/32-bit handlers** (`instr16_*`,
+  `instr32_*`, and the `instr_*` of opcodes without an operand size). An
+  `instr64_*` handler alone doesn't make an opcode behave differently in
+  64-bit mode. The opcodes that are invalid there (SDM "i64": push/pop of
+  ES/CS/SS/DS, BCD, pusha/popa, bound, 82, far call/jmp ptr, les/lds, into,
+  salc) start with `if trigger_ud_if_64() { return; }`; see
+  `tests/longmode/longmode.asm` tests 159-164.
 - **SIB index 4 with REX.X is r12, not "no index".** Dropping it silently
   corrupted Linux's identity maps.
 - **Anything that re-dispatches** (the STI shadow, single-steps) must use the

@@ -8,6 +8,103 @@ org 0xF0000
 
 %define RESULTS 0x90000
 
+; an interrupt gate in the IDT at 0x6000: vector %1 -> handler %2 (clobbers rax, rdi)
+%macro IDT_GATE 2
+    mov rax, %2
+    mov rdi, 0x6000 + %1*16
+    mov word [rdi], ax                  ; offset 15:0
+    mov word [rdi + 2], 0x08            ; selector
+    mov byte [rdi + 4], 0x00            ; reserved
+    mov byte [rdi + 5], 0x8E            ; P|dpl0|interrupt gate
+    shr rax, 16
+    mov word [rdi + 6], ax              ; offset 31:16
+    shr rax, 16
+    mov qword [rdi + 8], rax            ; offset 63:32
+%endmacro
+
+; ---- test 159-164: opcodes that are invalid in 64-bit mode ----
+%define UD64_STUB 0xE000                ; landing pad of far calls/jumps that run: jmp r10
+%define UD64_FARPTR 0xE100              ; memory operand ([rax]) of the encodings that have one
+%define UD64_GDTR 0xE200                ; test 163: gdtr with the 32-bit code segment 0x18
+
+; the prefix of variant %1: 0 none, 1 66 (16-bit operand size), 2 40 (REX), 3 48 (REX.W)
+%macro UD64_PREFIX 1
+%if %1 == 1
+    db 0x66
+%elif %1 == 2
+    db 0x40
+%elif %1 == 3
+    db 0x48
+%endif
+%endmacro
+
+; one encoding (%3, after the prefix of variant %1) that must raise #UD at its first byte;
+; otherwise bit %2 of result 159 + %1 is cleared. The #UD handler sets r11 if the saved rip is
+; r9, and resumes at r10. An encoding that runs instead is contained: rsp is restored, popa
+; only writes rax..rdi, pop finds a data segment selector, [rax] is a far pointer to one, and
+; far calls/jumps land on UD64_STUB
+%macro UD64 3+
+    lea r9, [rel %%insn]
+    lea r10, [rel %%done]
+    xor r11d, r11d                      ; also clears OF (into)
+    mov r12, rsp
+    push 0x10
+    push 0x10
+    mov eax, UD64_FARPTR
+%%insn:
+    UD64_PREFIX %1
+    db %3
+%%done:
+    mov rsp, r12
+    test r11d, r11d
+    jnz %%ok
+    btr qword [r15 + (159 + %1)*8], %2
+%%ok:
+%endmacro
+
+; all encodings for the prefix variant %1, one bit each (41 bits)
+%macro UD64_VARIANT 1
+    UD64 %1, 0, 0x06                    ; push es
+    UD64 %1, 1, 0x07                    ; pop es
+    UD64 %1, 2, 0x0E                    ; push cs
+    UD64 %1, 3, 0x16                    ; push ss
+    UD64 %1, 4, 0x17                    ; pop ss
+    UD64 %1, 5, 0x1E                    ; push ds
+    UD64 %1, 6, 0x1F                    ; pop ds
+    UD64 %1, 7, 0x27                    ; daa
+    UD64 %1, 8, 0x2F                    ; das
+    UD64 %1, 9, 0x37                    ; aaa
+    UD64 %1, 10, 0x3F                   ; aas
+    UD64 %1, 11, 0x60                   ; pusha
+    UD64 %1, 12, 0x61                   ; popa
+    UD64 %1, 13, 0x62, 0x00             ; bound eax, [rax] (EVEX in 64-bit mode)
+    UD64 %1, 14, 0x62, 0xC0             ; 62 with mod 11
+%if %1 == 1
+    UD64 %1, 15, 0x9A, 0x00, 0xE0, 0x08, 0x00                   ; call 0x08:UD64_STUB
+%else
+    UD64 %1, 15, 0x9A, 0x00, 0xE0, 0x00, 0x00, 0x08, 0x00       ; call 0x08:UD64_STUB
+%endif
+    UD64 %1, 16, 0xC4, 0x00             ; les eax, [rax] (VEX3 in 64-bit mode)
+    UD64 %1, 17, 0xC4, 0xC0             ; C4 with mod 11
+    UD64 %1, 18, 0xC5, 0x00             ; lds eax, [rax] (VEX2 in 64-bit mode)
+    UD64 %1, 19, 0xC5, 0xC0             ; C5 with mod 11
+    UD64 %1, 20, 0xCE                   ; into (OF clear)
+    UD64 %1, 21, 0xD4, 0x0A             ; aam
+    UD64 %1, 22, 0xD5, 0x0A             ; aad
+    UD64 %1, 23, 0xD6                   ; salc
+%if %1 == 1
+    UD64 %1, 24, 0xEA, 0x00, 0xE0, 0x08, 0x00                   ; jmp 0x08:UD64_STUB
+%else
+    UD64 %1, 24, 0xEA, 0x00, 0xE0, 0x00, 0x00, 0x08, 0x00       ; jmp 0x08:UD64_STUB
+%endif
+%assign g 0
+%rep 8
+    UD64 %1, 25 + g, 0x82, 0xC0 | g << 3, 0x01      ; add/or/adc/sbb/and/sub/xor/cmp al, 1
+    UD64 %1, 33 + g, 0x82, 0x00 | g << 3, 0x01      ; ... byte [rax], 1
+%assign g g + 1
+%endrep
+%endmacro
+
 [bits 16]
 start16:
     cli
@@ -1764,12 +1861,81 @@ t142_far:
     mov rax, cr0
     and rax, ~(1 << 16)
     mov cr0, rax
+
+    ; test 159-162: the opcodes that are invalid in 64-bit mode (Intel SDM Vol. 2, Table A-2,
+    ; "i64") raise #UD with every operand size: no prefix and a REX prefix (the 32-bit
+    ; handlers), 66 (the 16-bit ones) and REX.W (the 64-bit ones). One result per prefix, one
+    ; bit per encoding (see UD64_VARIANT), cleared if it didn't raise #UD at its first byte.
+    ; Three passes, so that the 64-bit jit runs them too (JIT_THRESHOLD=1)
+    IDT_GATE 6, ud_handler
+    mov dword [abs UD64_STUB], 0xCCE2FF41           ; jmp r10
+    mov rax, 0x0000001000100000         ; m16:32 = 0x10:0x00100000, m16:16 = 0x10:0
+    mov [abs UD64_FARPTR], rax
+    mov rax, (1 << 41) - 1
+    mov [r15 + 159*8], rax
+    mov [r15 + 160*8], rax
+    mov [r15 + 161*8], rax
+    mov [r15 + 162*8], rax
+    mov r8d, 3
+t159_pass:
+    UD64_VARIANT 0
+    UD64_VARIANT 1
+    UD64_VARIANT 2
+    UD64_VARIANT 3
+    dec r8d
+    jnz t159_pass
+
+    ; test 163-164: in compatibility mode (a 32-bit code segment, with EFER.LMA set) the same
+    ; opcodes are valid and run as in protected mode. GDT entry 0x18 is a 32-bit code segment;
+    ; retfq enters t163_compat, which runs them and returns with a far jump to the 64-bit code
+    ; segment. A #UD there stores its eip in 164 and returns to t163_back. Three passes, so
+    ; that the 32-bit jit runs them too
+    mov dword [abs 0x818], 0x0000FFFF
+    mov dword [abs 0x81C], 0x00CF9A00   ; P|S|E|R, G=1 D=1 L=0
+    mov word [abs UD64_GDTR], 4*8 - 1
+    mov qword [abs UD64_GDTR + 2], 0x800
+    lgdt [abs UD64_GDTR]
+    IDT_GATE 6, compat_ud_handler
+    mov qword [r15 + 163*8], 0
+    mov qword [r15 + 164*8], 0
+    mov r8d, 3
+t163_pass:
+    mov r12, rsp
+    push 0x18
+    push t163_compat
+    retfq                               ; to 0x18:t163_compat
+t163_back:
+    mov rsp, r12
+    dec r8d
+    jnz t163_pass
     jmp t142_back
 
 t151_cow:
     or dword [abs 0x5010], 2         ; RW
     invlpg [abs 0x40400000]
     add rsp, 8
+    iretq
+
+    ; #UD handler of test 159-162: r11 <- 1 if the saved rip is r9, resume at r10. #UD is a
+    ; fault, so the saved rflags have RF set; it's cleared since the faulting instruction isn't
+    ; restarted (with RF set, v86 would run the resume point in the interpreter, see
+    ; debug_mode_active)
+ud_handler:
+    cmp [rsp], r9
+    jne .resume
+    mov r11d, 1
+.resume:
+    mov [rsp], r10
+    and qword [rsp + 16], ~0x10000      ; RF
+    iretq
+
+    ; #UD handler of test 163-164 (not expected): store the eip, return to 64-bit code
+compat_ud_handler:
+    mov rax, [rsp]
+    mov [r15 + 164*8], rax
+    mov qword [rsp], t163_back
+    mov qword [rsp + 8], 0x08
+    and qword [rsp + 16], ~0x10000      ; RF
     iretq
 
     ; #PF handler part of test 142: PD2[1] -> 2MiB page @phys 0xA00000 (PD2
@@ -1779,6 +1945,48 @@ t142_demand:
     mov dword [abs 0x500C], 0
     add rsp, 8
     iretq                            ; re-executes the faulting pop
+
+[bits 32]
+    ; test 163-164: compatibility mode code (cs 0x18), on its own page
+    align 0x1000, db 0xCC
+t163_compat:
+    push es                             ; 06
+    pop es                              ; 07
+    push cs                             ; 0E
+    pop eax
+    push ss                             ; 16
+    pop ss                              ; 17
+    push ds                             ; 1E
+    pop ds                              ; 1F
+    o16 push es                         ; 66 06
+    o16 pop es                          ; 66 07
+    mov al, 0x0F
+    daa                                 ; 27
+    das                                 ; 2F
+    aaa                                 ; 37
+    aas                                 ; 3F
+    pushad                              ; 60
+    popad                               ; 61
+    pushaw                              ; 66 60
+    popaw                               ; 66 61
+    db 0x82, 0xC0, 0x01                 ; add al, 1
+    db 0x82, 0x05                       ; add byte [UD64_FARPTR + 8], 1
+    dd UD64_FARPTR + 8
+    db 0x01
+    call 0x18:t163_far                  ; 9A
+    les ebx, [UD64_FARPTR]              ; C4 (es <- 0x10)
+    lds ebx, [UD64_FARPTR]              ; C5 (ds <- 0x10)
+    xor eax, eax                        ; OF clear
+    into                                ; CE
+    aam                                 ; D4 0A
+    aad                                 ; D5 0A
+    db 0xD6                             ; salc
+    jmp 0x18:t163_end                   ; EA
+t163_far:
+    retf
+t163_end:
+    inc dword [RESULTS + 163*8]
+    jmp 0x08:t163_back                  ; EA, back to 64-bit mode
 
 [bits 16]
     ; reset vector at file offset 0xFFF0
