@@ -453,7 +453,7 @@ after_nx:
     mov [r15 + 51*8], rax              ; 0xDEAD
 
     ; ======== test 142-150: pop m64 restart after #PF, xchg r8/rax operand sizes ========
-    jmp t142_far                     ; out of line: no room left before 0x1F00
+    jmp t194_far                     ; out of line: no room left before 0x1F00 (194-197, then 142)
 t142_back:
 
     ; ======== test 52: movq xmm8 <-> r64 (REX.W+R, REX.W+B) ========
@@ -1784,6 +1784,84 @@ t108_far:
     add r9, 1
     add r9, 2
     jmp t108_back
+
+    ; test 194-197: a conditional jump to the next instruction (jcc +0) after a flag-setting
+    ; instruction, in hot loops so that the jits run it too (issue #16). Both targets of the jcc
+    ; are the following block, so the 64-bit jit generated no condition there, and the lazy flags
+    ; the cmp/add left in wasm locals weren't committed at the end of the block: the debug build
+    ; failed dbg_assert(jit64_deferred.is_none()) and the release build compiled the following
+    ; block as if the locals still held its flags. That block is also entered from a second path
+    ; (t194_c, t196_c) with other flags in memory, which the block's first commit overwrote: the
+    ; operation and operand size of the cmp/add, applied to whatever the locals held. Each slot
+    ; counts the passes of its path that see the right OF/SF/ZF/CF (pushfq). The passes alternate
+    ; between the paths, and there are enough that most of them run after the (asynchronous)
+    ; compilation has finished
+t194_far:
+    mov r10d, 100000
+t194_loop:
+    lea rdi, [r15 + 194*8]
+    mov r8d, 0x81                    ; 8-bit 1 - 2: SF CF
+    test r10b, 1
+    jnz t194_c
+    mov ah, 1
+    mov bl, 2
+    db 0x3A, 0xE3                    ; cmp ah, bl
+    db 0x7C, 0x00                    ; jl +0
+t194_b:
+    pushfq                           ; reads the flags first
+    pop rdx
+    and edx, 0x8C1                   ; OF SF ZF CF
+    cmp edx, r8d
+    sete al
+    movzx eax, al
+    add [rdi], rax
+    dec r10d
+    jnz t194_loop
+    jmp t196_start
+t194_c:
+    lea rdi, [r15 + 195*8]
+    xor r8d, r8d                     ; 32-bit 0x100 - 1: none (in 8 bits: SF CF)
+    mov eax, 0x100
+    mov ebx, 1
+    cmp eax, ebx
+    jmp t194_b
+
+t196_start:
+    mov r10d, 100000
+t196_loop:
+    lea rdi, [r15 + 196*8]
+    mov r8d, 0x880                   ; 32-bit 0x7FFFFFFF + 1: OF SF
+    test r10b, 1
+    jnz t196_c
+    mov esi, 0x7FFFFFFF
+    mov edx, 1
+    db 0x01, 0xD6                    ; add esi, edx
+    db 0x0F, 0x8C                    ; jl +0 (rel32)
+    dd 0
+t196_b:
+    nop                              ; leaves the flags alone: the block's end commits them
+    jmp t196_d
+t196_c:
+    lea rdi, [r15 + 197*8]
+    mov r8d, 0x840                   ; popfq: OF ZF
+    pushfq
+    pop rax
+    and eax, ~0x8D5                  ; OF SF ZF AF PF CF
+    or eax, 0x840
+    push rax
+    popfq
+    jmp t196_b
+t196_d:
+    pushfq
+    pop rdx
+    and edx, 0x8C1
+    cmp edx, r8d
+    sete al
+    movzx eax, al
+    add [rdi], rax
+    dec r10d
+    jnz t196_loop
+    jmp t142_far
 
     ; test 142/143: pop m64 restarts cleanly after a #PF on its destination.
     ; The destination page is unmapped: the handler maps it and iretq re-runs

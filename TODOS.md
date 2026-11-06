@@ -263,7 +263,10 @@ Nothing known hits these.
   4 GiB).
 - Deferred lazy flags keep last_op1/last_result in function-wide locals and
   commit at observation points: block ends, interpreter calls, and cold
-  commits on memory slow paths.
+  commits on memory slow paths. A block ending in a jcc commits in
+  `gen_condition_fn`, after computing the condition from the locals; a jcc
+  to the next instruction generates no condition and commits in the glue
+  (issue #16). Every block starts with nothing deferred.
 - The data TLB cache keeps the last validated page in two locals. It's
   zeroed at interpreter calls, the only places where mappings can change.
 - Switches: `set_jit_config(4, 1)` disables JIT64, `(5, n)` sets the hotness

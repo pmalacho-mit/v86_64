@@ -105,6 +105,48 @@ function* encodings()
     }
 }
 
+// Issue #16: a jcc to the next instruction after a flag-setting instruction. With both targets the
+// following block, the jcc generated no condition, and the lazy flags the 64-bit jit keeps in wasm
+// locals weren't committed at the end of the block (dbg_assert jit64_deferred.is_none() at the
+// start of the next one). Each instruction below, followed by each jcc +0 (rel8 and rel32), is
+// compiled too. They leave different deferred lazy-flag states (operation, operand size, carry
+// kept by inc/dec, flags cleared by logic operations, memory operand), or none (adc, sbb and shl
+// store their flags eagerly, nop sets none)
+const FLAG_SETTERS = [
+    [0x3A, 0xE3],                               // cmp ah, bl (issue #16)
+    [0x01, 0xD6],                               // add esi, edx (issue #16)
+    [0x66, 0x29, 0xD6],                         // sub si, dx
+    [0x48, 0x39, 0xD6],                         // cmp rsi, rdx
+    [0x48, 0x3D, 0x01, 0x00, 0x00, 0x00],       // cmp rax, 1
+    [0x48, 0x83, 0xC6, 0x01],                   // add rsi, 1
+    [0x48, 0x39, 0x06],                         // cmp [rsi], rax
+    [0x48, 0x11, 0xD6],                         // adc rsi, rdx
+    [0x19, 0xD6],                               // sbb esi, edx
+    [0x48, 0xF7, 0xDE],                         // neg rsi
+    [0x30, 0xD6],                               // xor dh, dl
+    [0x09, 0xD6],                               // or esi, edx
+    [0x48, 0x21, 0xD6],                         // and rsi, rdx
+    [0x48, 0x85, 0xD6],                         // test rsi, rdx
+    [0xFE, 0xC0],                               // inc al
+    [0xFF, 0xC6],                               // inc esi
+    [0x48, 0xFF, 0xCE],                         // dec rsi
+    [0x48, 0x39, 0xD6, 0xFF, 0xC6],             // cmp rsi, rdx; inc esi
+    [0x48, 0xD1, 0xE6],                         // shl rsi, 1
+    [0x90],                                     // nop
+];
+
+function* flag_jcc_sequences()
+{
+    for(const setter of FLAG_SETTERS)
+    {
+        for(let cc = 0; cc < 16; cc++)
+        {
+            yield { label: "flags + jcc +0 (rel8)", bytes: [...setter, 0x70 | cc, 0x00] };
+            yield { label: "flags + jcc +0 (rel32)", bytes: [...setter, 0x0F, 0x80 | cc, 0, 0, 0, 0] };
+        }
+    }
+}
+
 function create_emulator()
 {
     return new Promise(resolve => {
@@ -163,7 +205,8 @@ function record_failure(key, bytes, state)
     failures.get(key).push(Buffer.from(bytes).toString("hex") + (state.cpl ? " (cpl 3)" : ""));
 }
 
-async function compile(e, bytes, state)
+// label: the name failures are reported under, instead of e's opcode
+async function compile(e, bytes, state, label)
 {
     cpu.is_64[0] = 1;
     cpu.is_32[0] = 0;
@@ -176,9 +219,9 @@ async function compile(e, bytes, state)
     cpu.mem8.fill(0xF4, PAGE + 0x40, PAGE + 0x1000);
     cpu.mem8.set(bytes, PAGE);
 
-    const name = "opcode " + e.opcode.toString(16).toUpperCase() +
+    const name = label || ("opcode " + e.opcode.toString(16).toUpperCase() +
         (e.map ? " (map " + e.map.toString(16).toUpperCase() + ")" : "") +
-        (e.fixed_g === undefined ? "" : "/" + e.fixed_g);
+        (e.fixed_g === undefined ? "" : "/" + e.fixed_g));
     cases++;
     module_result = null;
     try
@@ -213,6 +256,13 @@ for(const state of STATES)
     for(const { e, bytes } of encodings())
     {
         await compile(e, bytes, state);
+    }
+}
+for(const state of STATES)
+{
+    for(const { label, bytes } of flag_jcc_sequences())
+    {
+        await compile(null, bytes, state, label);
     }
 }
 emulator.destroy();

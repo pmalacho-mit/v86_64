@@ -2199,6 +2199,15 @@ fn jit_generate_module(
                                 ctx.builder.block_end();
                                 ctx.builder.set_local(target_block);
                             }
+                            else {
+                                // Both targets are the one block that follows (a jcc to the
+                                // next instruction): no condition is generated, so the 64-bit
+                                // jit's deferred lazy flags, otherwise committed by
+                                // gen_condition_fn, are committed here (issue #16). Like every
+                                // block, the following one starts with the flags in memory: it
+                                // may also be entered from elsewhere
+                                crate::jit64::gen_commit_deferred_flags(ctx);
+                            }
                         }
                         else if branch_taken_is_fallthrough {
                             handle_case(Case::BranchNotTaken, true);

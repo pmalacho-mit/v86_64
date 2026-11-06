@@ -214,6 +214,14 @@ const expected = [
     0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
     0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
     0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
+    // 181-193: left to issue #11's branch (far call/jmp through m16:32)
+    0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    // 194-197: jcc to the next instruction after a flag-setting instruction (issue #16), passes
+    // with the right flags in the following block, entered from the jcc and from another path
+    50000n,              // 194: cmp r8 + jl +0 (rel8), from the jcc
+    50000n,              // 195: ... from a 32-bit cmp elsewhere
+    50000n,              // 196: add r32 + jl +0 (rel32), from the jcc
+    50000n,              // 197: ... from a popfq elsewhere
 ];
 
 const emulator = new V86({
