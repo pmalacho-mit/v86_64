@@ -183,8 +183,10 @@ function gen_instruction_body_after_prefix(encodings, size)
                     body: gen_instruction_body_after_fixed_g(case_, size),
                 })),
                 default_case: {
+                    // #UD (raised at the start of the instruction). The memory operand isn't
+                    // decoded: the analyzer (shared with the 32-bit jit) ends the instruction
+                    // after the modrm byte, and the lengths have to agree
                     body: [
-                        "jit64::skip_modrm(ctx.cpu, modrm_byte);",
                         `jit64::gen_generic(ctx, "jit64_trigger_ud", &[]);`,
                         "*instr_flags |= jit::JIT_INSTR_BLOCK_BOUNDARY_FLAG;",
                     ],
