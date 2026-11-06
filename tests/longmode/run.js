@@ -214,6 +214,37 @@ const expected = [
     0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
     0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
     0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
+    // 181-199: taken by other open branches (issue #11: 181-193, #16: 194-197, #15: 198)
+    0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    // 200-211: retf in 64-bit mode with rsp above 4 GiB, to the same privilege level (issue #13),
+    // see T200_SAME: bits 0-15 bytes popped (rsp in the target - rsp before), 16-31 cs in the
+    // target, 32 not through the decoy frame at the low alias of rsp
+    0x100080008n,        // 200: retf (CB)
+    0x100080020n,        // 201: retf 0x18 (CA)
+    0x100080004n,        // 202: o16 retf (66 CB)
+    0x10008001Cn,        // 203: o16 retf 0x18 (66 CA)
+    0x100080010n,        // 204: o64 retf (48 CB)
+    0x100080028n,        // 205: o64 retf 0x18 (48 CA)
+    0x100080008n,        // 206: retf with REX without W (41 CB)
+    0x100080010n,        // 207: 66 48 CB (REX.W wins)
+    0x100180008n,        // 208: retf to compatibility mode
+    0x100900020n,        // 209: retf 0x18 to compatibility mode, cs with a base
+    0x100900004n,        // 210: o16 retf to compatibility mode, cs with a base
+    0x100900028n,        // 211: o64 retf 0x18 to compatibility mode, cs with a base
+    // 212-221: ... to an outer privilege level, see T200_OUTER: rsp in the target, then its
+    // cs | ss << 16 | ds << 32 | es << 48 (ds 0x10 becomes null, es 0x8B doesn't)
+    0xC0009610n,         // 212: retf 0x10 to cpl 3: esp + 0x10, zero-extended
+    0x008B0000008B0083n, // 213
+    0xF610n,             // 214: o16 retf 0x10 to cpl 3: sp + 0x10, zero-extended
+    0x008B0000008B0083n, // 215
+    0x100009610n,        // 216: o64 retf 0x10 to cpl 3
+    0x008B0000008B0083n, // 217
+    0x9500n,             // 218: retf to cpl 1 with a null ss
+    0x008B0000000100C1n, // 219
+    0xC0009610n,         // 220: retf 0x10 to cpl 3 in compatibility mode
+    0x008B0000008B00CBn, // 221
+    0x1FFFFFFFn,         // 222: retfs that fault (#GP, #NP, #SS, #PF), one bit each
+    3n,                  // 223: passes of 200-222
 ];
 
 const emulator = new V86({

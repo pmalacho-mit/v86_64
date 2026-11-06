@@ -1915,6 +1915,10 @@ t163_back:
     dec r8d
     jnz t163_pass
 
+    ; ======== test 200-223: retf (CB, CA) in 64-bit mode with each operand size ========
+    jmp t200_start                      ; out of line, see t200_start
+t200_back:
+
     ; ======== test 165-180: register-to-register moves in the store form, jitted (hot loop) ========
     ; 0F 29 (movaps), 0F 11 (movups), 66 0F 7F (movdqa) and F3 0F 7F (movdqu) with mod=11 copy
     ; xmm(modrm.reg) into xmm(modrm.rm). nasm assembles these moves in the load form (0F 28,
@@ -2015,6 +2019,483 @@ t142_demand:
     mov dword [abs 0x500C], 0
     add rsp, 8
     iretq                            ; re-executes the faulting pop
+
+    ; test 200-223: far return (retf, CB and CA) in 64-bit mode with each operand size (issue
+    ; #13). A far return defaults to a 32-bit operand size (16 with 66, 64 with REX.W), but in
+    ; 64-bit mode the stack address size is 64 bits for all three (Intel SDM Vol. 2, RET, IA-32e
+    ; mode): cs:ip, and ss:rsp on a return to an outer privilege level, are slots of the operand
+    ; size at rsp, and imm16 releases parameters from both stacks. The retfs run with rsp above
+    ; 4 GiB (T200_HIRSP, PDPT[4] maps 0x100000000 to phys 0x600000), and the low alias of their
+    ; frame (rsp truncated to 32 bits) holds a decoy frame to t200_decoy, so that a retf that pops
+    ; through esp shows up in the result. 200-211: same privilege level, see T200_SAME; 212-221:
+    ; to cpl 3 or 1 (and back with syscall), two results each, see T200_OUTER; 222: one bit per
+    ; retf that must fault, see T200_FAULT; 223: passes. Three passes, so that the jits run it too
+%define T200_KRSP 0x9000                ; rsp of the test (cpl 0)
+%define T200_BACK 0x9008                ; m16:32 0x08:<resume point>, for compatibility mode code
+%define T200_TRSP 0x9010                ; rsp (esp) in the target of a same privilege return
+%define T200_TCS 0x9018                 ; cs in that target
+%define T200_DECOYED 0x9020             ; 1: the retf took the decoy frame
+%define T200_URSP 0x9028                ; rsp (esp) in the target of an outer privilege return
+%define T200_USEL 0x9030                ; cs, ss, ds and es (a word each) in that target
+%define T200_PASS 0x9038                ; passes left
+%define T200_GDTR 0x9040
+%define T200_MSRS 0x9060                ; saved IA32_STAR, IA32_LSTAR and IA32_CSTAR
+%define T200_TSS 0x9800                 ; 64-bit TSS (rsp0: a fault at cpl 3 reaches the handlers)
+%define T200_TSS_RSP0 0x9F00
+%define T200_PD 0xA000                  ; PD of PDPT[4]: PD[0] -> 2 MiB page at phys 0x600000
+%define T200_STUB 0xB000                ; jmp r10 (the resume point): for a 16-bit ip
+%define T200_STUB_DECOY 0xB004          ; jmp r12 (t200_decoy)
+%define T200_STUB_USER 0xB008           ; jmp r14 (the target at cpl 3)
+%define T200_CB_IP 0xB020               ; offset of t200_compat in segment 0x90 (base T200_CBASE),
+                                        ; and a pad there (jmp far [T200_BACK]) for a lost base
+%define T200_LIMIT_IP 0xB040            ; beyond the limit of segment 0xB0, a pad there as well
+%define T200_HIRSP 0x100009700          ; rsp of the retfs; the decoy frame is at 0x9700
+%define T200_PFRSP 0x100200000          ; not present (PD[1] of T200_PD)
+%define T200_CBASE (t200_compat - $$ + 0xF0000 - T200_CB_IP)
+%define T200_NFAULTS 29                 ; bits of result 222
+
+; a slot of %1 bytes at [%2] <- %3 (clobbers rax)
+%macro T200_PUT 3
+    mov rax, %3
+%if %1 == 2
+    mov [%2], ax
+%elif %1 == 4
+    mov [%2], eax
+%else
+    mov [%2], rax
+%endif
+%endmacro
+
+; the frame of a retf with operand size %1 (bytes) at rsp %2, left in rdi: ip %3 and cs %4 (with
+; garbage above bit 15 of its slot); and the decoy frame at its low alias: 0x08:t200_decoy
+; (T200_STUB_DECOY for a 16-bit ip)
+%macro T200_FRAME 4
+    mov rdi, %2
+    T200_PUT %1, rdi, %3
+    T200_PUT %1, rdi + %1, 0xDEADBEEFCAFE0000 | %4
+    mov esi, edi
+%if %1 == 2
+    T200_PUT %1, rsi, T200_STUB_DECOY
+%else
+    T200_PUT %1, rsi, t200_decoy
+%endif
+    T200_PUT %1, rsi + %1, 0x08
+%endmacro
+
+; ... of a return to an outer privilege level: %5 bytes of parameters (all ones), then sp %6 and
+; ss %7 (with garbage above bit 15 of its slot)
+%macro T200_FRAME_OUTER 7
+    T200_FRAME %1, %2, %3, %4
+%assign t200_i 0
+%rep %5 / 8
+    mov qword [rdi + 2*%1 + t200_i], -1
+%assign t200_i t200_i + 8
+%endrep
+    T200_PUT %1, rdi + 2*%1 + %5, %6
+    T200_PUT %1, rdi + 3*%1 + %5, 0xDEADBEEFCAFE0000 | %7
+%endmacro
+
+; result %1: the retf %4 with operand size %2 (bytes) at T200_HIRSP, to the same privilege level
+; in cs %3: 0x08 (64-bit), 0x18 (compatibility mode) or 0x90 (compatibility mode, with a base).
+; Bits 0-15: rsp in the target - T200_HIRSP (in compatibility mode esp - its low half; 0xFFFF
+; if not in 0-0xFFFE), 16-31: cs in the target, 32: the retf didn't take the decoy frame
+%macro T200_SAME 4+
+    lea r10, [rel %%resume]
+    mov [abs T200_BACK], r10d
+    mov qword [abs T200_DECOYED], 0
+    mov qword [abs T200_TRSP], -1
+    mov qword [abs T200_TCS], 0
+%if %3 == 0x08
+  %if %2 == 2
+    T200_FRAME %2, T200_HIRSP, T200_STUB, 0x08
+  %else
+    T200_FRAME %2, T200_HIRSP, %%resume, 0x08
+  %endif
+%elif %3 == 0x18
+    T200_FRAME %2, T200_HIRSP, t200_compat, 0x18
+%else
+    T200_FRAME %2, T200_HIRSP, T200_CB_IP, 0x90
+%endif
+    mov rsp, rdi
+    db %4
+%%resume:
+%if %3 == 0x08
+    mov [abs T200_TRSP], rsp
+    mov [abs T200_TCS], cs
+%endif
+    mov rsp, [abs T200_KRSP]
+    mov rax, [abs T200_TRSP]
+%if %3 == 0x08
+    mov rdx, T200_HIRSP
+%else
+    mov edx, T200_HIRSP & 0xFFFFFFFF
+%endif
+    sub rax, rdx
+    cmp rax, 0xFFFF
+    jb %%delta
+    mov eax, 0xFFFF
+%%delta:
+    movzx edx, word [abs T200_TCS]
+    shl edx, 16
+    or rax, rdx
+    cmp qword [abs T200_DECOYED], 0
+    jne %%decoyed
+    bts rax, 32
+%%decoyed:
+    mov [r15 + %1*8], rax
+%endmacro
+
+; results %1 and %1 + 1: the retf %8 with operand size %2 (bytes) at T200_HIRSP to cs %3 at an
+; outer privilege level, with %4 bytes of parameters, sp %5 and ss %6 (ds is 0x10 before, which
+; becomes null, and es 0x8B, which doesn't). The target %7 (t200_user: 64-bit code, or
+; t200_ucompat) stores its rsp (esp) in T200_URSP and its cs, ss, ds and es in T200_USEL, and
+; returns with syscall: result %1 is T200_URSP, %1 + 1 T200_USEL
+%macro T200_OUTER 8+
+    lea r10, [rel %%resume]
+    lea r14, [rel %7]
+    mov qword [abs T200_DECOYED], 0
+    mov qword [abs T200_URSP], -1
+    mov qword [abs T200_USEL], 0
+    mov ax, 0x8B
+    mov es, ax
+%if %2 == 2
+    T200_FRAME_OUTER %2, T200_HIRSP, T200_STUB_USER, %3, %4, %5, %6
+%else
+    T200_FRAME_OUTER %2, T200_HIRSP, %7, %3, %4, %5, %6
+%endif
+    mov rsp, rdi
+    db %8
+%%resume:                               ; from t200_syscall (or t200_decoy, a fault) at cpl 0
+    mov ax, 0x10
+    mov ss, ax
+    mov rsp, [abs T200_KRSP]
+    mov ds, ax
+    mov es, ax
+    mov rax, [abs T200_URSP]
+    mov [r15 + %1*8], rax
+    mov rax, [abs T200_USEL]
+    mov [r15 + (%1 + 1)*8], rax
+%endmacro
+
+; the retf %3, with its frame at rdi, must raise %2 (vector << 32 | error code) with the saved
+; rip at its first byte and rsp unchanged, otherwise bit %1 of result 222 is cleared. The fault
+; handlers resume at r10, as do the targets of a retf that doesn't fault (t200_land, T200_STUB,
+; the pads through T200_BACK, t200_user_sys through t200_syscall)
+%macro T200_FAULT 3+
+    lea r10, [rel %%done]
+    mov [abs T200_BACK], r10d
+    mov r11, -1
+    xor r9d, r9d
+    mov rsp, rdi
+%%insn:
+    db %3
+%%done:
+    lea rax, [rel %%insn]
+    cmp r9, rax
+    jne %%bad
+    cmp rsp, rdi
+    jne %%bad
+    mov rax, %2
+    cmp r11, rax
+    je %%ok
+%%bad:
+    btr qword [r15 + 222*8], %1
+%%ok:
+    mov ax, 0x10                        ; ss is null after a fault at cpl 3
+    mov ss, ax
+    mov rsp, [abs T200_KRSP]
+    mov ds, ax
+    mov es, ax
+%endmacro
+
+%macro T200_RDMSR 2                     ; msr, address
+    mov ecx, %1
+    rdmsr
+    mov [abs %2], eax
+    mov [abs %2 + 4], edx
+%endmacro
+%macro T200_WRMSR 2
+    mov ecx, %1
+    mov eax, [abs %2]
+    mov edx, [abs %2 + 4]
+    wrmsr
+%endmacro
+
+t200_start:
+    cld
+    mov [abs T200_KRSP], rsp
+    ; GDT: 0x80 64-bit code (dpl 3), 0x88 data (dpl 3), 0x90 32-bit code with base T200_CBASE and
+    ; limit 0xFFFF, 0x98 64-bit code (not present), 0xA0 code with L and D set, 0xA8 64-bit
+    ; conforming code (dpl 3), 0xB0 32-bit code with limit T200_LIMIT_IP - 1, 0xB8 data (dpl 3,
+    ; not present), 0xC0 64-bit code (dpl 1), 0xC8 32-bit code (dpl 3), 0xD0 32-bit code (dpl 1),
+    ; 0xD8 64-bit TSS
+    mov rax, 0x00AFFA000000FFFF
+    mov [abs 0x880], rax
+    mov rax, 0x00CFF2000000FFFF
+    mov [abs 0x888], rax
+    mov rax, 0x00409A000000FFFF | (T200_CBASE & 0xFFFFFF) << 16 | (T200_CBASE >> 24) << 56
+    mov [abs 0x890], rax
+    mov rax, 0x00AF1A000000FFFF
+    mov [abs 0x898], rax
+    mov rax, 0x00EF9A000000FFFF
+    mov [abs 0x8A0], rax
+    mov rax, 0x00AFFE000000FFFF
+    mov [abs 0x8A8], rax
+    mov rax, 0x00409A0000000000 | (T200_LIMIT_IP - 1)
+    mov [abs 0x8B0], rax
+    mov rax, 0x00CF72000000FFFF
+    mov [abs 0x8B8], rax
+    mov rax, 0x00AFBA000000FFFF
+    mov [abs 0x8C0], rax
+    mov rax, 0x00CFFA000000FFFF
+    mov [abs 0x8C8], rax
+    mov rax, 0x00CFBA000000FFFF
+    mov [abs 0x8D0], rax
+    mov rax, 0x0000890000000067 | T200_TSS << 16
+    mov [abs 0x8D8], rax
+    mov qword [abs 0x8E0], 0
+    mov word [abs T200_GDTR], 0xE8 - 1
+    mov qword [abs T200_GDTR + 2], 0x800
+    lgdt [abs T200_GDTR]
+    mov rdi, T200_TSS
+    xor eax, eax
+    mov ecx, 0x68 / 8
+    rep stosq
+    mov qword [abs T200_TSS + 4], T200_TSS_RSP0
+    mov word [abs T200_TSS + 0x66], 0x68        ; no I/O bitmap
+    mov ax, 0xD8
+    ltr ax
+    IDT_GATE 11, t200_np
+    IDT_GATE 12, t200_ss
+    IDT_GATE 13, t200_gp
+    IDT_GATE 14, t200_pf
+    ; PDPT[4] -> T200_PD, PD[0] -> 2 MiB page at phys 0x600000
+    mov rdi, T200_PD
+    xor eax, eax
+    mov ecx, 512
+    rep stosq
+    mov dword [abs T200_PD], 0x600087           ; P|RW|US|PS
+    mov dword [abs 0x2000 + 4*8], T200_PD | 7   ; P|RW|US
+    mov dword [abs T200_STUB], 0xCCE2FF41       ; jmp r10
+    mov dword [abs T200_STUB_DECOY], 0xCCE4FF41 ; jmp r12
+    mov dword [abs T200_STUB_USER], 0xCCE6FF41  ; jmp r14
+    mov word [abs T200_CB_IP], 0x2DFF           ; jmp far [T200_BACK] (32-bit)
+    mov dword [abs T200_CB_IP + 2], T200_BACK
+    mov word [abs T200_LIMIT_IP], 0x2DFF
+    mov dword [abs T200_LIMIT_IP + 2], T200_BACK
+    mov word [abs T200_BACK + 4], 0x08
+    lea r12, [rel t200_decoy]
+    ; syscall (from 64-bit code and compatibility mode) returns to cpl 0
+    T200_RDMSR 0xC0000081, T200_MSRS
+    T200_RDMSR 0xC0000082, T200_MSRS + 8
+    T200_RDMSR 0xC0000083, T200_MSRS + 16
+    mov ecx, 0xC0000080                         ; IA32_EFER
+    rdmsr
+    or eax, 1                                   ; SCE
+    wrmsr
+    xor eax, eax
+    mov edx, 0x00180008                         ; star[47:32] = 0x08
+    mov ecx, 0xC0000081                         ; IA32_STAR
+    wrmsr
+    mov eax, t200_syscall
+    xor edx, edx
+    mov ecx, 0xC0000082                         ; IA32_LSTAR
+    wrmsr
+    mov ecx, 0xC0000083                         ; IA32_CSTAR
+    wrmsr
+    mov qword [r15 + 223*8], 0
+    mov dword [abs T200_PASS], 3
+
+t200_pass:
+    mov qword [r15 + 222*8], (1 << T200_NFAULTS) - 1
+
+    ; 200-207: to 64-bit code
+    T200_SAME 200, 4, 0x08, 0xCB                    ; retf
+    T200_SAME 201, 4, 0x08, 0xCA, 0x18, 0x00        ; retf 0x18
+    T200_SAME 202, 2, 0x08, 0x66, 0xCB              ; o16 retf
+    T200_SAME 203, 2, 0x08, 0x66, 0xCA, 0x18, 0x00  ; o16 retf 0x18
+    T200_SAME 204, 8, 0x08, 0x48, 0xCB              ; o64 retf
+    T200_SAME 205, 8, 0x08, 0x48, 0xCA, 0x18, 0x00  ; o64 retf 0x18
+    T200_SAME 206, 4, 0x08, 0x41, 0xCB              ; REX without W: 32-bit
+    T200_SAME 207, 8, 0x08, 0x66, 0x48, 0xCB        ; REX.W wins over 66
+    ; 208-211: to compatibility mode
+    T200_SAME 208, 4, 0x18, 0xCB
+    T200_SAME 209, 4, 0x90, 0xCA, 0x18, 0x00
+    T200_SAME 210, 2, 0x90, 0x66, 0xCB
+    T200_SAME 211, 8, 0x90, 0x48, 0xCA, 0x18, 0x00
+
+    ; 212-221: to an outer privilege level
+    mov ax, 0x10
+    mov ds, ax
+    T200_OUTER 212, 4, 0x83, 0x10, 0xC0009600, 0x8B, t200_user, 0xCA, 0x10, 0x00
+    T200_OUTER 214, 2, 0x83, 0x10, 0xF600, 0x8B, t200_user, 0x66, 0xCA, 0x10, 0x00
+    T200_OUTER 216, 8, 0x83, 0x10, 0x100009600, 0x8B, t200_user, 0x48, 0xCA, 0x10, 0x00
+    T200_OUTER 218, 4, 0xC1, 0, 0x9500, 0x0001, t200_user, 0xCB   ; null ss at cpl 1
+    T200_OUTER 220, 4, 0xCB, 0x10, 0xC0009600, 0x8B, t200_ucompat, 0xCA, 0x10, 0x00
+
+    ; 222: retfs that fault
+    T200_FRAME 4, T200_HIRSP, t200_land, 0x00
+    T200_FAULT 0, 13 << 32 | 0, 0xCB                    ; null cs
+    T200_FRAME 2, T200_HIRSP, T200_STUB, 0x03
+    T200_FAULT 1, 13 << 32 | 0, 0x66, 0xCB
+    T200_FRAME 8, T200_HIRSP, t200_land, 0x00
+    T200_FAULT 2, 13 << 32 | 0, 0x48, 0xCB
+    T200_FRAME 4, T200_HIRSP, t200_land, 0x10
+    T200_FAULT 3, 13 << 32 | 0x10, 0xCB                 ; data segment
+    T200_FRAME 4, T200_HIRSP, t200_land, 0x98
+    T200_FAULT 4, 11 << 32 | 0x98, 0xCB                 ; not present
+    T200_FRAME 8, T200_HIRSP, t200_land, 0x98
+    T200_FAULT 5, 11 << 32 | 0x98, 0x48, 0xCB
+    T200_FRAME 4, T200_HIRSP, t200_land, 0xA0
+    T200_FAULT 6, 13 << 32 | 0xA0, 0xCB                 ; L and D set
+    T200_FRAME 8, T200_HIRSP, t200_land, 0xA0
+    T200_FAULT 7, 13 << 32 | 0xA0, 0x48, 0xCB
+    T200_FRAME 4, T200_HIRSP, t200_land, 0x0B
+    T200_FAULT 8, 13 << 32 | 0x08, 0xCB                 ; non-conforming, dpl 0 != rpl 3
+    T200_FRAME 4, T200_HIRSP, t200_land, 0xA8
+    T200_FAULT 9, 13 << 32 | 0xA8, 0xCB                 ; conforming, dpl 3 > rpl 0
+    T200_FRAME 8, T200_HIRSP, t200_land, 0xA8
+    T200_FAULT 10, 13 << 32 | 0xA8, 0x48, 0xCB
+    T200_FRAME 8, T200_HIRSP, 0x0000800000000000, 0x08
+    T200_FAULT 11, 13 << 32 | 0, 0x48, 0xCB             ; non-canonical rip
+    T200_FRAME 4, T200_HIRSP, T200_LIMIT_IP, 0xB0
+    T200_FAULT 12, 13 << 32 | 0, 0xCB                   ; eip beyond the cs limit
+    T200_FRAME 2, T200_HIRSP, T200_LIMIT_IP, 0xB0
+    T200_FAULT 13, 13 << 32 | 0, 0x66, 0xCB
+    T200_FRAME 8, T200_HIRSP, T200_LIMIT_IP, 0xB0
+    T200_FAULT 14, 13 << 32 | 0, 0x48, 0xCB
+    ; the cs slot is on a page that isn't present
+    mov rdi, T200_PFRSP - 4
+    T200_PUT 4, rdi, t200_land
+    T200_FAULT 15, 14 << 32 | 0, 0xCB
+    mov rdi, T200_PFRSP - 2
+    T200_PUT 2, rdi, T200_STUB
+    T200_FAULT 16, 14 << 32 | 0, 0x66, 0xCB
+    mov rdi, T200_PFRSP - 8
+    T200_PUT 8, rdi, t200_land
+    T200_FAULT 17, 14 << 32 | 0, 0x48, 0xCB
+    ; ... the ss slot of a return to cpl 3 (after ip, cs, 0x10 bytes of parameters and esp)
+    mov rdi, T200_PFRSP - 0x1C
+    T200_PUT 4, rdi, t200_user_sys
+    T200_PUT 4, rdi + 4, 0x83
+    T200_PUT 4, rdi + 0x18, 0x9600
+    T200_FAULT 18, 14 << 32 | 0, 0xCA, 0x10, 0x00
+    ; to an outer privilege level, with an invalid ss
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0x83, 0, 0x9600, 0x0003
+    T200_FAULT 19, 13 << 32 | 0, 0xCB                   ; null ss at cpl 3
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0x83, 0, 0x9600, 0x88
+    T200_FAULT 20, 13 << 32 | 0x88, 0xCB                ; ss rpl 0 != cs rpl 3
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0x83, 0, 0x9600, 0x13
+    T200_FAULT 21, 13 << 32 | 0x10, 0xCB                ; ss dpl 0 != 3
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0x83, 0, 0x9600, 0x83
+    T200_FAULT 22, 13 << 32 | 0x80, 0xCB                ; ss is a code segment
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0x83, 0, 0x9600, 0xBB
+    T200_FAULT 23, 12 << 32 | 0xB8, 0xCB                ; ss not present
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_user_sys, 0xC1, 0, 0x9600, 0x0000
+    T200_FAULT 24, 13 << 32 | 0, 0xCB                   ; null ss with rpl 0 != cpl 1
+    T200_FRAME_OUTER 8, T200_HIRSP, 0x0000800000000000, 0x83, 0, 0x9600, 0x8B
+    T200_FAULT 25, 13 << 32 | 0, 0x48, 0xCB             ; non-canonical rip
+    T200_FRAME_OUTER 8, T200_HIRSP, t200_user_sys, 0x83, 0x10, 0x9600, 0x0003
+    T200_FAULT 26, 13 << 32 | 0, 0x48, 0xCA, 0x10, 0x00 ; null ss at cpl 3
+    lea r14, [rel t200_user_sys]
+    T200_FRAME_OUTER 2, T200_HIRSP, T200_STUB_USER, 0x83, 0, 0x9600, 0x88
+    T200_FAULT 27, 13 << 32 | 0x88, 0x66, 0xCB          ; ss rpl 0 != cs rpl 3
+    T200_FRAME_OUTER 4, T200_HIRSP, t200_ucompat_sys, 0xD1, 0, 0x9600, 0x0001
+    T200_FAULT 28, 13 << 32 | 0, 0xCB                   ; null ss to compatibility mode
+
+    inc qword [r15 + 223*8]
+    dec dword [abs T200_PASS]
+    jnz t200_pass
+
+    T200_WRMSR 0xC0000081, T200_MSRS
+    T200_WRMSR 0xC0000082, T200_MSRS + 8
+    T200_WRMSR 0xC0000083, T200_MSRS + 16
+    ; back to the gdt of test 163 (tr keeps the TSS)
+    mov word [abs T200_GDTR], 4*8 - 1
+    lgdt [abs T200_GDTR]
+    IDT_GATE 14, pf_handler
+    xor eax, eax
+    mov [abs 0x6000 + 11*16], rax
+    mov [abs 0x6000 + 11*16 + 8], rax
+    mov [abs 0x6000 + 12*16], rax
+    mov [abs 0x6000 + 12*16 + 8], rax
+    mov [abs 0x6000 + 13*16], rax
+    mov [abs 0x6000 + 13*16 + 8], rax
+    mov dword [abs 0x2000 + 4*8], 0
+    mov rax, cr3
+    mov cr3, rax
+    mov rsp, [abs T200_KRSP]
+    jmp t200_back
+
+    ; the decoy: a retf that popped through esp
+t200_decoy:
+    mov qword [abs T200_DECOYED], 1
+    jmp r10
+t200_land:
+    jmp r10
+
+    ; the 64-bit target at cpl 3 or 1 of T200_OUTER (ds may be null)
+t200_user:
+    mov [abs T200_URSP], rsp
+    mov [abs T200_USEL], cs
+    mov [abs T200_USEL + 2], ss
+    mov [abs T200_USEL + 4], ds
+    mov [abs T200_USEL + 6], es
+t200_user_sys:
+    syscall
+
+    ; syscall from there (or from t200_ucompat), cpl 0 again: resume at r10
+t200_syscall:
+    mov rsp, [abs T200_KRSP]
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    jmp r10
+
+    ; #NP, #SS, #GP and #PF handlers of test 222: r11 <- vector << 32 | error code, r9 <- the
+    ; saved rip, resume at 0x08:r10 (RF cleared, see ud_handler)
+t200_np:
+    mov r11d, 11
+    jmp t200_fault
+t200_ss:
+    mov r11d, 12
+    jmp t200_fault
+t200_gp:
+    mov r11d, 13
+    jmp t200_fault
+t200_pf:
+    mov r11d, 14
+t200_fault:
+    shl r11, 32
+    or r11, [rsp]
+    mov r9, [rsp + 8]
+    add rsp, 8
+    mov [rsp], r10
+    mov qword [rsp + 8], 0x08
+    and qword [rsp + 16], ~0x10000
+    iretq
+
+[bits 32]
+    ; compatibility mode targets of test 200-223, on their own page
+    align 0x1000, db 0xCC
+    ; same privilege level (cs 0x18, or 0x90 with base T200_CBASE): store esp and cs, return to
+    ; 64-bit code through T200_BACK
+t200_compat:
+    mov [T200_TRSP], esp
+    mov dword [T200_TRSP + 4], 0
+    mov [T200_TCS], cs
+    jmp far [T200_BACK]
+    ; cs 0xCB (cpl 3): ds is null, so through es. syscall works in compatibility mode on v86 (as
+    ; on AMD, through IA32_CSTAR)
+t200_ucompat:
+    mov [es:T200_URSP], esp
+    mov dword [es:T200_URSP + 4], 0
+    mov [es:T200_USEL], cs
+    mov [es:T200_USEL + 2], ss
+    mov [es:T200_USEL + 4], ds
+    mov [es:T200_USEL + 6], es
+t200_ucompat_sys:
+    syscall
 
 [bits 32]
     ; test 163-164: compatibility mode code (cs 0x18), on its own page

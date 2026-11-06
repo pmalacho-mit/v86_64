@@ -1634,6 +1634,11 @@ pub unsafe fn instr32_C9() {
 #[no_mangle]
 pub unsafe fn instr16_CA(imm16: i32) {
     // retf
+    if *is_64 {
+        // 66 CA: the frame is on the 64-bit stack
+        far_return64(16, imm16);
+        return;
+    }
     let ip = return_on_pagefault!(safe_read16(get_stack_pointer(0)));
     let cs = return_on_pagefault!(safe_read16(get_stack_pointer(2)));
     far_return(ip, cs, imm16, false);
@@ -1641,6 +1646,11 @@ pub unsafe fn instr16_CA(imm16: i32) {
 #[no_mangle]
 pub unsafe fn instr32_CA(imm16: i32) {
     // retf
+    if *is_64 {
+        // CA without REX.W (far returns don't default to 64 bits), on the 64-bit stack
+        far_return64(32, imm16);
+        return;
+    }
     let ip = return_on_pagefault!(safe_read32s(get_stack_pointer(0)));
     let cs = return_on_pagefault!(safe_read32s(get_stack_pointer(4))) & 0xFFFF;
     far_return(ip, cs, imm16, true);
@@ -1649,6 +1659,10 @@ pub unsafe fn instr32_CA(imm16: i32) {
 #[no_mangle]
 pub unsafe fn instr16_CB() {
     // retf
+    if *is_64 {
+        far_return64(16, 0);
+        return;
+    }
     let ip = return_on_pagefault!(safe_read16(get_stack_pointer(0)));
     let cs = return_on_pagefault!(safe_read16(get_stack_pointer(2)));
     far_return(ip, cs, 0, false);
@@ -1657,6 +1671,10 @@ pub unsafe fn instr16_CB() {
 #[no_mangle]
 pub unsafe fn instr32_CB() {
     // retf
+    if *is_64 {
+        far_return64(32, 0);
+        return;
+    }
     let ip = return_on_pagefault!(safe_read32s(get_stack_pointer(0)));
     let cs = return_on_pagefault!(safe_read32s(get_stack_pointer(4))) & 0xFFFF;
     far_return(ip, cs, 0, true);

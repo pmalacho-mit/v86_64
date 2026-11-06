@@ -319,7 +319,13 @@ Nothing known hits these.
   64-bit mode. The opcodes that are invalid there (SDM "i64": push/pop of
   ES/CS/SS/DS, BCD, pusha/popa, bound, 82, far call/jmp ptr, les/lds, into,
   salc) start with `if trigger_ud_if_64() { return; }`; see
-  `tests/longmode/longmode.asm` tests 159-164.
+  `tests/longmode/longmode.asm` tests 159-164. The stack is 64-bit in
+  64-bit mode for every operand size, but the legacy stack helpers those
+  handlers use (`get_stack_pointer`, `adjust_stack_reg`, `set_stack_reg`,
+  `push16`, `pop16`) go through esp, so rsp loses bits 63:32. Far ret
+  (CB/CA) calls `far_return64` with its operand size instead (tests
+  200-223); 16-bit push and pop (`66 50+r`, `66 58+r`, `66 68`) still have
+  the bug.
 - **SIB index 4 with REX.X is r12, not "no index".** Dropping it silently
   corrupted Linux's identity maps.
 - **Anything that re-dispatches** (the STI shadow, single-steps) must use the

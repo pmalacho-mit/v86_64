@@ -992,16 +992,12 @@ pub unsafe fn instr64_C9() {
     write_reg64(EBP, v);
 }
 pub unsafe fn instr64_CA(a0: i32) {
-    // retf imm16
-    let rip = return_on_pagefault!(pop64());
-    let cs = return_on_pagefault!(pop64()) as u16;
-    far_return64(rip, cs as i32, a0 as u64);
+    // retf imm16 (REX.W)
+    far_return64(64, a0);
 }
 pub unsafe fn instr64_CB() {
-    // retf
-    let rip = return_on_pagefault!(pop64());
-    let cs = return_on_pagefault!(pop64()) as u16;
-    far_return64(rip, cs as i32, 0);
+    // retf (REX.W)
+    far_return64(64, 0);
 }
 pub unsafe fn instr64_CF() { iret64(); }
 pub unsafe fn instr64_D1_0_mem(addr: u64) { safe_read_write64(addr, &|x| rol64(x, 1)) }

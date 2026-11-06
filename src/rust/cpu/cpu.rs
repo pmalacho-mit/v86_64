@@ -5,8 +5,8 @@ use crate::cpu::fpu::fpu_set_tag_word;
 use crate::cpu::global_pointers::*;
 use crate::cpu::memory;
 use crate::cpu::misc_instr::{
-    adjust_stack_reg, get_stack_pointer, getaf, getcf, getof, getpf, getsf, getzf, pop16, pop32s,
-    pop64, push16, push32, push64,
+    adjust_stack_reg, get_stack_pointer, get_stack_pointer64, getaf, getcf, getof, getpf, getsf,
+    getzf, pop16, pop32s, push16, push32, push64,
 };
 use crate::cpu::modrm::{resolve_modrm16, resolve_modrm32, resolve_modrm64};
 use crate::cpu::{apic, ioapic, pic};
@@ -2196,82 +2196,201 @@ pub unsafe fn far_jump(eip: i32, selector: i32, is_call: bool, is_osize_32: bool
     }
 }
 
-/// 64-bit far return (retfq): pop rip, cs (and rsp, ss on a privilege change).
-/// rip is the value popped by the caller; the stack has been advanced past it.
-pub unsafe fn far_return64(rip: u64, selector: i32, stack_adjust: u64) {
+/// A slot of a far return frame on the 64-bit stack: `osize` bits at rsp + `offset`,
+/// zero-extended
+unsafe fn read_stack_slot64(offset: i32, osize: u32) -> OrPageFault<u64> {
+    let address = get_stack_pointer64(offset);
+    Ok(match osize {
+        16 => safe_read16(address)? as u64,
+        32 => safe_read32s(address)? as u32 as u64,
+        _ => safe_read64s(address)?,
+    })
+}
+
+/// Far return (retf, CB and CA) in 64-bit mode with operand size `osize`: 16 (0x66), 32 (no
+/// prefix: unlike a near ret, a far ret doesn't default to 64 bits) or 64 (REX.W). The stack
+/// address size is 64 bits for all three (Intel SDM Vol. 2, RET, IA-32e mode): ip and cs are two
+/// slots of `osize` bits at rsp, and on a return to an outer privilege level, rsp and ss are two
+/// more after the `stack_adjust` bytes of parameters, which are released from both stacks. The
+/// target can be a 64-bit or a compatibility mode code segment. Nothing changes before all the
+/// checks have passed, so a fault leaves rsp, the segment registers and cpl as they were.
+pub unsafe fn far_return64(osize: u32, stack_adjust: i32) {
+    dbg_assert!(*is_64);
+    dbg_assert!(osize == 16 || osize == 32 || osize == 64);
+    dbg_assert!(stack_adjust >= 0 && stack_adjust < 0x10000);
+
+    let size = (osize / 8) as i32;
+    let ip = return_on_pagefault!(read_stack_slot64(0, osize));
+    // the bits of the cs slot above 15 are discarded
+    let selector = return_on_pagefault!(read_stack_slot64(size, osize)) as u16 as i32;
+
     let cs_selector = SegmentSelector::of_u16(selector as u16);
     let info = match return_on_pagefault!(lookup_segment_selector(cs_selector)) {
         Ok((desc, _)) => desc,
-        Err(SelectorNullOrInvalid::IsNull) | Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
+        Err(SelectorNullOrInvalid::IsNull) => {
+            dbg_log!("far return64: #gp null cs");
+            trigger_gp(0);
+            return;
+        },
+        Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
             dbg_log!("far return64: #gp invalid cs: {:x}", selector);
             trigger_gp(selector & !3);
             return;
         },
     };
 
-    if info.is_system() || !info.is_executable() || !info.is_present() {
-        dbg_log!("far return64: #gp cs is not a present code segment");
+    if info.is_system() || !info.is_executable() {
+        dbg_log!("far return64: #gp cs is not a code segment: {:x}", selector);
         trigger_gp(selector & !3);
         return;
     }
-    if cs_selector.rpl() < *cpl {
-        dbg_log!("far return64: #gp rpl < cpl");
+    if info.is_64() && info.is_32() {
+        dbg_log!("far return64: #gp cs with L and D set: {:x}", selector);
         trigger_gp(selector & !3);
         return;
     }
-    if !info.is_dc() && cs_selector.rpl() != info.dpl() {
-        dbg_log!("far return64: #gp non-conforming cs and rpl != dpl");
+    let rpl = cs_selector.rpl();
+    if rpl < *cpl {
+        dbg_log!("far return64: #gp rpl < cpl: {:x}", selector);
         trigger_gp(selector & !3);
+        return;
+    }
+    if info.is_dc() && info.dpl() > rpl {
+        dbg_log!(
+            "far return64: #gp conforming cs and dpl > rpl: {:x}",
+            selector
+        );
+        trigger_gp(selector & !3);
+        return;
+    }
+    if !info.is_dc() && info.dpl() != rpl {
+        dbg_log!(
+            "far return64: #gp non-conforming cs and dpl != rpl: {:x}",
+            selector
+        );
+        trigger_gp(selector & !3);
+        return;
+    }
+    if !info.is_present() {
+        dbg_log!("far return64: #np cs: {:x}", selector);
+        trigger_np(selector & !3);
         return;
     }
 
-    if cs_selector.rpl() > *cpl {
-        // outer privilege return: pop rsp and ss
-        let new_rsp = return_on_pagefault!(pop64());
-        let new_ss = return_on_pagefault!(pop64()) as u16;
-        let ss_selector = SegmentSelector::of_u16(new_ss);
-        let ss_descriptor = match return_on_pagefault!(lookup_segment_selector(ss_selector)) {
-            Ok((desc, _)) => desc,
-            Err(SelectorNullOrInvalid::IsNull)
-            | Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
-                dbg_log!("far return64: #gp invalid ss: {:x}", new_ss);
-                trigger_gp(new_ss as i32 & !3);
+    let target_is_64 = info.is_64();
+
+    // to an outer privilege level: the new ss and rsp
+    let outer = if rpl > *cpl {
+        let sp = return_on_pagefault!(read_stack_slot64(2 * size + stack_adjust, osize));
+        let ss = return_on_pagefault!(read_stack_slot64(3 * size + stack_adjust, osize)) as u16;
+        let ss_selector = SegmentSelector::of_u16(ss);
+        match return_on_pagefault!(lookup_segment_selector(ss_selector)) {
+            Err(SelectorNullOrInvalid::IsNull) => {
+                // valid only on a return to 64-bit mode at cpl 1 or 2, with the new cpl as rpl
+                if !target_is_64 || rpl == 3 || ss_selector.rpl() != rpl {
+                    dbg_log!("far return64: #gp null ss: {:x}", ss);
+                    trigger_gp(0);
+                    return;
+                }
+            },
+            Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
+                dbg_log!("far return64: #gp invalid ss: {:x}", ss);
+                trigger_gp(ss as i32 & !3);
                 return;
             },
-        };
-        if ss_descriptor.is_system()
-            || ss_selector.rpl() != cs_selector.rpl()
-            || !ss_descriptor.is_writable()
-            || ss_descriptor.dpl() != cs_selector.rpl()
-            || !ss_descriptor.is_present()
-        {
-            dbg_log!("far return64: #gp/#ss invalid ss descriptor");
-            trigger_gp(new_ss as i32 & !3);
-            return;
+            Ok((ss_info, _)) => {
+                if ss_selector.rpl() != rpl
+                    || ss_info.is_system()
+                    || !ss_info.is_writable()
+                    || ss_info.dpl() != rpl
+                {
+                    dbg_log!("far return64: #gp invalid ss: {:x}", ss);
+                    trigger_gp(ss as i32 & !3);
+                    return;
+                }
+                if !ss_info.is_present() {
+                    dbg_log!("far return64: #ss ss not present: {:x}", ss);
+                    trigger_ss(ss as i32 & !3);
+                    return;
+                }
+            },
         }
-        // no exceptions below
-        *cpl = cs_selector.rpl();
-        cpl_changed();
-        write_reg64(ESP, new_rsp);
-        if !switch_seg(SS, new_ss as i32) {
-            dbg_assert!(false);
-        }
+        Some((ss, sp))
     }
     else {
-        write_reg64(ESP, read_reg64(ESP).wrapping_add(stack_adjust));
+        None
+    };
+
+    if target_is_64 {
+        if !is_canonical_address(ip) {
+            dbg_log!("far return64: #gp non-canonical rip: {:x}", ip);
+            trigger_gp(0);
+            return;
+        }
+    }
+    else if ip > info.effective_limit() as u64 {
+        dbg_log!("far return64: #gp eip beyond the cs limit: {:x}", ip);
+        trigger_gp(0);
+        return;
     }
 
     // no exceptions below
 
+    if outer.is_some() {
+        *cpl = rpl;
+        cpl_changed();
+    }
+
+    let base = if target_is_64 { 0 } else { info.base() };
     *sreg.offset(CS as isize) = selector as u16 & !3 | *cpl as u16;
     *segment_is_null.offset(CS as isize) = false;
     *segment_limits.offset(CS as isize) = info.effective_limit();
-    *segment_offsets.offset(CS as isize) = if *is_64 { 0 } else { info.base() };
+    *segment_offsets.offset(CS as isize) = base;
     *segment_access_bytes.offset(CS as isize) = info.access_byte();
 
     update_cs_size(info.is_32(), info.is_64());
 
-    *instruction_pointer = rip;
+    match outer {
+        Some((ss, sp)) => {
+            // after cs and cpl: switch_seg checks ss against the new cpl, and allows a null ss
+            // in 64-bit mode
+            if !switch_seg(SS, ss as i32) {
+                dbg_assert!(false);
+            }
+            if target_is_64 {
+                write_reg64(ESP, sp.wrapping_add(stack_adjust as u64));
+            }
+            else {
+                // in compatibility mode with the stack address size of the new ss
+                set_stack_reg((sp as i32).wrapping_add(stack_adjust));
+            }
+
+            // data segments that aren't accessible at the new cpl become null. A null selector
+            // doesn't refer to a segment (and in 64-bit mode, fs and gs keep their base)
+            for reg in [ES, DS, FS, GS] {
+                if *sreg.offset(reg as isize) & !3 == 0 {
+                    continue;
+                }
+                let access = *segment_access_bytes.offset(reg as isize);
+                let dpl = access >> 5 & 3;
+                let executable = access & 8 == 8;
+                let conforming = access & 4 == 4;
+                if dpl < *cpl && !(executable && conforming) {
+                    *segment_is_null.offset(reg as isize) = true;
+                    *sreg.offset(reg as isize) = 0;
+                }
+            }
+        },
+        None => {
+            write_reg64(
+                ESP,
+                read_reg64(ESP).wrapping_add((2 * size + stack_adjust) as u64),
+            );
+        },
+    }
+
+    *instruction_pointer =
+        if target_is_64 { ip } else { (base as u32).wrapping_add(ip as u32) as u64 };
 
     update_state_flags();
 }
