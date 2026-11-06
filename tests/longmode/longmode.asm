@@ -1914,6 +1914,70 @@ t163_back:
     mov rsp, r12
     dec r8d
     jnz t163_pass
+
+    ; ======== test 165-180: register-to-register moves in the store form, jitted (hot loop) ========
+    ; 0F 29 (movaps), 0F 11 (movups), 66 0F 7F (movdqa) and F3 0F 7F (movdqu) with mod=11 copy
+    ; xmm(modrm.reg) into xmm(modrm.rm). nasm assembles these moves in the load form (0F 28,
+    ; 0F 10, 66 0F 6F, F3 0F 6F), so they are written as bytes. The value goes through a chain
+    ; of them, each destination zeroed first, so a move in the wrong direction zeroes the rest of
+    ; the chain. Issue #8: the 64-bit jit emitted these with the operands of the wasm store in
+    ; the wrong order, and the module failed to compile (V8 node running openvscode-server)
+    mov r10d, 10000
+t165_loop:
+    mov rax, 0x0123456789ABCDEF
+    movq xmm4, rax
+    mov rax, 0xFEDCBA9876543210
+    pinsrq xmm4, rax, 1
+    pxor xmm2, xmm2
+    db 0x0F, 0x29, 0xE2              ; movaps xmm2, xmm4 (the instruction of issue #8)
+    pxor xmm5, xmm5
+    db 0x0F, 0x11, 0xD5              ; movups xmm5, xmm2
+    pxor xmm6, xmm6
+    db 0x66, 0x0F, 0x7F, 0xEE        ; movdqa xmm6, xmm5
+    pxor xmm7, xmm7
+    db 0xF3, 0x0F, 0x7F, 0xF7        ; movdqu xmm7, xmm6
+    pxor xmm9, xmm9
+    db 0x41, 0x0F, 0x29, 0xF9        ; movaps xmm9, xmm7 (REX.B)
+    pxor xmm10, xmm10
+    db 0x45, 0x0F, 0x11, 0xCA        ; movups xmm10, xmm9 (REX.R and REX.B)
+    pxor xmm0, xmm0
+    db 0x66, 0x44, 0x0F, 0x7F, 0xD0  ; movdqa xmm0, xmm10 (REX.R)
+    pxor xmm11, xmm11
+    db 0xF3, 0x41, 0x0F, 0x7F, 0xC3  ; movdqu xmm11, xmm0 (REX.B)
+    dec r10d
+    jnz t165_loop
+    movq rbx, xmm2
+    mov [r15 + 165*8], rbx           ; 0x0123456789ABCDEF
+    pextrq rbx, xmm2, 1
+    mov [r15 + 166*8], rbx           ; 0xFEDCBA9876543210
+    movq rbx, xmm5
+    mov [r15 + 167*8], rbx
+    pextrq rbx, xmm5, 1
+    mov [r15 + 168*8], rbx
+    movq rbx, xmm6
+    mov [r15 + 169*8], rbx
+    pextrq rbx, xmm6, 1
+    mov [r15 + 170*8], rbx
+    movq rbx, xmm7
+    mov [r15 + 171*8], rbx
+    pextrq rbx, xmm7, 1
+    mov [r15 + 172*8], rbx
+    movq rbx, xmm9
+    mov [r15 + 173*8], rbx
+    pextrq rbx, xmm9, 1
+    mov [r15 + 174*8], rbx
+    movq rbx, xmm10
+    mov [r15 + 175*8], rbx
+    pextrq rbx, xmm10, 1
+    mov [r15 + 176*8], rbx
+    movq rbx, xmm0
+    mov [r15 + 177*8], rbx
+    pextrq rbx, xmm0, 1
+    mov [r15 + 178*8], rbx
+    movq rbx, xmm11
+    mov [r15 + 179*8], rbx
+    pextrq rbx, xmm11, 1
+    mov [r15 + 180*8], rbx
     jmp t142_back
 
 t151_cow:

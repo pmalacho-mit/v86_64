@@ -315,14 +315,15 @@ pub fn gen_sse_mov_store(ctx: &mut JitContext, modrm_byte: u8) {
     let r = (modrm_byte >> 3 & 7) as u32 | ctx.cpu.rex_r();
     let src_off = global_pointers::get_reg_xmm_offset(r);
     if modrm_byte >= 0xC0 {
-        // register to register: copy both halves
+        // register to register (xmm_rm = xmm_r): copy both halves. A wasm store takes the
+        // address below the value, so the destination is pushed before the load
         let rm = (modrm_byte & 7) as u32 | ctx.cpu.rex_b();
         let dst_off = global_pointers::get_reg_xmm_offset(rm);
-        ctx.builder.load_fixed_i64(src_off);
         ctx.builder.const_i32(dst_off as i32);
+        ctx.builder.load_fixed_i64(src_off);
         ctx.builder.store_aligned_i64(0);
-        ctx.builder.load_fixed_i64(src_off + 8);
         ctx.builder.const_i32(dst_off as i32 + 8);
+        ctx.builder.load_fixed_i64(src_off + 8);
         ctx.builder.store_aligned_i64(0);
         return;
     }
