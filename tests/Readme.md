@@ -15,7 +15,9 @@ following list is roughtly sorted from most interesting/useful to least.
   read-modify-write ops and conditional jumps over marker writes. Seeded and
   reproducible; parallelized with cluster workers; survives (and reports)
   emulator crashes. See the header of fuzz/run.js for the
-  FUZZ_SEED/FUZZ_CASES knobs.
+  FUZZ_SEED/FUZZ_CASES knobs. `make fuzz-hw-tests` (fuzz/hw.js) runs the
+  64-bit cases on the host's x86-64 CPU too and compares v86 with it, which
+  also finds bugs the interpreter and the JIT share.
 - [qemu](qemu/): Based on tests from qemu. Builds a Linux binary, which tests
   many CPU features, which are then compared to a run on qemu.
 - [kvm-unit-test](kvm-unit-test/): Based on tests from the KVM project, tests

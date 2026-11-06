@@ -400,6 +400,23 @@ nasmtests-force-jit: build/v86-debug.wasm
 fuzz-tests: build/v86-debug.wasm
 	./tests/fuzz/run.js
 
+# 64-bit fuzz cases against the host CPU (tests/fuzz/hw.js). On x86-64 Linux the
+# runner executes natively (the reference); elsewhere it runs under qemu-user via
+# `docker run --platform linux/amd64`, which is only a provisional reference
+# (docs/testing-aarch64.md). The runner is freestanding, so a cross compiler
+# without an x86 libc is enough.
+FUZZ_HW_CC ?= $(shell command -v x86_64-linux-gnu-gcc || echo gcc)
+FUZZ_HW_RUN ?= $(if $(filter x86_64,$(shell uname -m)),sh -c,docker run --rm --platform linux/amd64 -u "$$(id -u):$$(id -g)" -v "$(CURDIR)":"$(CURDIR)" -w "$(CURDIR)" debian:trixie sh -c)
+build/fuzz-hw/runner: tests/fuzz/hw/runner.c
+	mkdir -p build/fuzz-hw
+	$(FUZZ_HW_CC) -O2 -static -nostdlib -ffreestanding -fno-stack-protector -fno-pie -no-pie \
+		-mcmodel=large -Wl,-Ttext-segment=0x500000000000 -Wall -Wextra -o $@ $<
+
+fuzz-hw-tests: build/v86-debug.wasm build/fuzz-hw/runner
+	./tests/fuzz/hw.js export build/fuzz-hw/cases.bin
+	$(FUZZ_HW_RUN) 'build/fuzz-hw/runner < build/fuzz-hw/cases.bin > build/fuzz-hw/results.bin'
+	./tests/fuzz/hw.js compare build/fuzz-hw/results.bin
+
 longmode-tests: build/v86-debug.wasm
 	./tests/longmode/run.js
 	JIT_THRESHOLD=1 ./tests/longmode/run.js

@@ -781,14 +781,26 @@ function emit_instruction(e, rng, c, mode)
  * config: { mode: 32|64, paging: bool, size: 8|16|32|64, mem: 0|1 }
  * seed: 32-bit seed
  *
- * Returns { name, mode, paging, image, scratch, instr_bytes, low_mem_compare }:
+ * options.user_mode: the case will also be run as a ring-3 Linux process
+ *   (tests/fuzz/hw.js), so keep EFLAGS.AC clear: Linux sets CR0.AM, and AC=1
+ *   would turn misaligned accesses into #AC there but not in v86's ring 0.
+ *   Masking doesn't change the random number sequence.
+ *
+ * Returns { name, mode, paging, image, scratch, instr_bytes, low_mem_compare,
+ *           entry64, done_addr, chain_ops, instr_starts, has_branch }:
  *   image: Uint8Array, a multiboot kernel image
  *   scratch: Uint8Array(SCRATCH_SIZE), initial scratch memory contents
  *   instr_bytes: the encodings of the fuzzed instructions (for logging)
  *   low_mem_compare: true if the case may write below 64 KiB (16-bit
  *                    addressing); run.js then also compares low memory
+ *   entry64: (64-bit) address of the hlt ending the mode-switch stub; the
+ *            64-bit body starts right after it
+ *   done_addr: address of the hlt after the fuzzed instructions
+ *   chain_ops: the table entries of the fuzzed instructions
+ *   instr_starts: their addresses
+ *   has_branch: a conditional jump over a marker write follows them
  */
-export function generate_case(op, config, seed, nth)
+export function generate_case(op, config, seed, nth, options = {})
 {
     const mode = config.mode;
     const rng = new Rand(seed);
@@ -1020,7 +1032,7 @@ export function generate_case(op, config, seed, nth)
     // random eflags (TF/IF/NT/RF/VM masked out); push imm32; popf also works
     // in long mode (sign-extended imm32, popfq)
     e.u8(0x68);
-    e.u32(rng.int32() & ~FLAGS_MASK_OUT);
+    e.u32(rng.int32() & ~FLAGS_MASK_OUT & ~(options.user_mode ? 1 << 18 : 0));
     e.u8(0x9D);
 
     if(rng.int32() & 1)
@@ -1039,8 +1051,10 @@ export function generate_case(op, config, seed, nth)
 
     // === the fuzzed instructions ===
     const instr_bytes = [];
+    const instr_starts = [];
     for(const c of chain)
     {
+        instr_starts.push(e.at());
         instr_bytes.push(...emit_instruction(e, rng, c, mode));
     }
 
@@ -1082,6 +1096,7 @@ export function generate_case(op, config, seed, nth)
     }
 
     // hlt (+ padding: a RIP-relative write may land here, keep it harmless)
+    const done_addr = e.at();
     e.u8(0xF4);
     for(let i = 0; i < 64; i++) e.u8(0xF4);
 
@@ -1179,5 +1194,10 @@ export function generate_case(op, config, seed, nth)
         scratch,
         instr_bytes: new Uint8Array(instr_bytes),
         low_mem_compare,
+        entry64,
+        done_addr,
+        chain_ops: chain.map(c => c.op),
+        instr_starts,
+        has_branch,
     };
 }

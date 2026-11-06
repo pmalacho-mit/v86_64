@@ -258,7 +258,10 @@ else {
 
         cpu.reboot_internal();
         cpu.reset_memory();
-        cpu.load_multiboot(fs.readFileSync(TEST_DIR + current_test.img_name).buffer);
+        // Node may serve small files from a shared pool, where the Buffer is a
+        // view at a non-zero offset into a larger ArrayBuffer: copy out exactly the file
+        const img = fs.readFileSync(TEST_DIR + current_test.img_name);
+        cpu.load_multiboot(img.buffer.slice(img.byteOffset, img.byteOffset + img.byteLength));
 
         test_timeout = setTimeout(() => {
             console.error("Test " + test.img_name + " timed out after " + (SINGLE_TEST_TIMEOUT / 1000) + " seconds.");

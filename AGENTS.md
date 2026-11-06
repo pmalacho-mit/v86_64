@@ -45,6 +45,8 @@ directed and reviewed by a human. The full rules are in the
    and the test targets.
 3. [docs/how-it-works.md](docs/how-it-works.md) and
    [docs/profiling.md](docs/profiling.md) cover the internals.
+4. [docs/testing-aarch64.md](docs/testing-aarch64.md) covers testing on a
+   non-x86 host: which suites need x86, and where nasmtests fixtures come from.
 
 ## Build and test
 
@@ -54,9 +56,17 @@ make all                   # release build, including build/v86-mem64.wasm
 make rust-test expect-tests
 make nasmtests nasmtests-force-jit   # needs nasm + gdb
 make longmode-tests
+make fuzz-hw-tests          # 64-bit fuzz cases vs the host CPU (provisional under qemu on aarch64)
 make tests                 # guest boots; images aren't in the repo (see Readme)
 ```
 
+- **On a non-x86 host (aarch64), nasmtests fixtures can't be generated
+  trustworthily.** Run `tests/nasm/run.js` against fixtures from x86 CI or an
+  x86 machine. If you add or change nasm tests (or `gen/x86_table.js`), tell
+  the human user to re-run the test generator (`make nasmtests`) on an x86
+  machine, Intel or AMD, no difference, and give you the fixtures. qemu
+  fixtures are provisional only: never commit them. See
+  [docs/testing-aarch64.md](docs/testing-aarch64.md).
 - `src/rust/gen/*.rs` is generated from `gen/*.js` by make. Don't edit it by
   hand.
 - New CPU state fields go in both `src/rust/cpu/global_pointers.rs` and the
