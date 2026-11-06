@@ -110,8 +110,9 @@ nasm suite, both variants, after every non-trivial change.
    folded into the generated register indices.
 3. Opcodes that default to 64-bit operands in long mode need `d64: 1` in the
    table (see push/pop/call/ret). Group 0xFF mixes default-64 sub-ops
-   (call/jmp/push) with REX.W-gated ones (inc/dec), so inc/dec re-check
-   `rex_w()` and fall back to the 32-bit body.
+   (near call/jmp, push) with REX.W-gated ones, which re-check `rex_w()`:
+   inc/dec fall back to the 32-bit body, and far call/jmp (`/3`, `/5`) take
+   an m16:32 operand without REX.W (`read_far_pointer64`, `far_jump64`).
 4. Opcodes with an embedded register (B8+r etc.) need `rex_b()`.
 5. Instructions that hardcode AH–BH must bypass the REX remap via
    `read_reg8_legacy_high`/`write_reg8_legacy_high`.
@@ -215,6 +216,8 @@ Nothing known hits these.
   IA-32e frame, 64-bit (REX.W) sysexit isn't implemented, and the TF-preempt
   check in `jit_run_interpreted` only looks at the second opcode byte within
   the same page.
+- 64-bit call gates aren't implemented: a far call/jmp through one raises
+  #GP (`far_jump64`).
 - Debug registers: 32-bit addresses only. No I/O breakpoints (CR4.DE), no
   general detect, and the MOV SS/POP SS/STI trap shadow isn't modelled.
 - init.flat: the BIOS warm-resume vector only fires on the INIT path,

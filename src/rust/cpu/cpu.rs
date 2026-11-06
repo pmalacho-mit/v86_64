@@ -5,8 +5,8 @@ use crate::cpu::fpu::fpu_set_tag_word;
 use crate::cpu::global_pointers::*;
 use crate::cpu::memory;
 use crate::cpu::misc_instr::{
-    adjust_stack_reg, get_stack_pointer, getaf, getcf, getof, getpf, getsf, getzf, pop16, pop32s,
-    pop64, push16, push32, push64,
+    adjust_stack_reg, get_stack_pointer, get_stack_pointer64, getaf, getcf, getof, getpf, getsf,
+    getzf, pop16, pop32s, pop64, push16, push32,
 };
 use crate::cpu::modrm::{resolve_modrm16, resolve_modrm32, resolve_modrm64};
 use crate::cpu::{apic, ioapic, pic};
@@ -2276,58 +2276,133 @@ pub unsafe fn far_return64(rip: u64, selector: i32, stack_adjust: u64) {
     update_state_flags();
 }
 
-/// 64-bit far call/jmp (m16:64 or m16:32 with 64-bit submode semantics).
-pub unsafe fn far_jump64(rip: u64, selector: i32, is_call: bool) {
+/// Far call or jmp through a memory far pointer in 64-bit mode (FF /3 and FF /5): `offset` and
+/// `selector` come from the m16:16, m16:32 or m16:64 operand of operand size `osize` (16 with
+/// 0x66, 32 without a prefix, 64 with REX.W: in group 5 only near call/jmp and push default to 64
+/// bits). A call pushes cs and the return address as two slots of `osize` bits on the 64-bit
+/// stack, after all the checks, so that a fault leaves rsp and memory unchanged. The target can be
+/// a 64-bit or a compatibility mode code segment. System descriptors raise #GP(selector): TSS and
+/// task gates are invalid in IA-32e mode, and 64-bit call gates aren't implemented.
+pub unsafe fn far_jump64(offset: u64, selector: i32, is_call: bool, osize: u32) {
+    dbg_assert!(*is_64);
+    dbg_assert!(osize == 16 || osize == 32 || osize == 64);
+    dbg_assert!(selector >= 0 && selector < 0x10000);
+
     let cs_selector = SegmentSelector::of_u16(selector as u16);
     let info = match return_on_pagefault!(lookup_segment_selector(cs_selector)) {
         Ok((desc, _)) => desc,
-        Err(SelectorNullOrInvalid::IsNull) | Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
+        Err(SelectorNullOrInvalid::IsNull) => {
+            dbg_log!("far jump64: #gp null cs");
+            trigger_gp(0);
+            return;
+        },
+        Err(SelectorNullOrInvalid::OutsideOfTableLimit) => {
             dbg_log!("far jump64: #gp invalid cs: {:x}", selector);
             trigger_gp(selector & !3);
             return;
         },
     };
 
-    if info.is_system() || !info.is_executable() || !info.is_present() {
-        dbg_log!("far jump64: #gp cs is not a present code segment");
+    if info.is_system() {
+        dbg_log!(
+            "far jump64: #gp system descriptor type={:x} (64-bit call gates are unimplemented)",
+            info.system_type()
+        );
         trigger_gp(selector & !3);
         return;
     }
-    if !info.is_64() {
-        dbg_log!("far jump64: #gp cs is not 64-bit in long mode");
+    if !info.is_executable() {
+        dbg_log!("far jump64: #gp non-executable cs: {:x}", selector);
         trigger_gp(selector & !3);
+        return;
+    }
+    if info.is_64() && info.is_32() {
+        dbg_log!("far jump64: #gp cs with L and D set: {:x}", selector);
+        trigger_gp(selector & !3);
+        return;
+    }
+    if info.is_dc() {
+        // conforming
+        if info.dpl() > *cpl {
+            dbg_log!("far jump64: #gp conforming cs dpl > cpl: {:x}", selector);
+            trigger_gp(selector & !3);
+            return;
+        }
+    }
+    else if cs_selector.rpl() > *cpl || info.dpl() != *cpl {
+        dbg_log!(
+            "far jump64: #gp non-conforming cs rpl > cpl or dpl != cpl: {:x}",
+            selector
+        );
+        trigger_gp(selector & !3);
+        return;
+    }
+    if !info.is_present() {
+        dbg_log!("far jump64: #np cs: {:x}", selector);
+        trigger_np(selector & !3);
         return;
     }
 
-    if info.is_dc() || info.dpl() == *cpl {
-        // intra-privilege
-    }
-    else if !info.is_dc() && info.dpl() < *cpl {
-        // call through a call gate to a more privileged level: not supported
-        dbg_log!("far call64 to outer privilege: unimplemented");
-        trigger_gp(selector & !3);
-        return;
+    let target_is_64 = info.is_64();
+    let mut new_ip = if osize == 16 { offset & 0xFFFF } else { offset };
+    if target_is_64 {
+        if !is_canonical_address(new_ip) {
+            dbg_log!("far jump64: #gp non-canonical rip: {:x}", new_ip);
+            trigger_gp(0);
+            return;
+        }
     }
     else {
-        dbg_log!("far jump64: #gp dpl > cpl");
-        trigger_gp(selector & !3);
-        return;
+        // compatibility mode
+        new_ip &= 0xFFFF_FFFF;
+        if new_ip > info.effective_limit() as u64 {
+            dbg_log!("far jump64: #gp eip beyond the cs limit: {:x}", new_ip);
+            trigger_gp(0);
+            return;
+        }
     }
 
     if is_call {
-        return_on_pagefault!(push64(*sreg.offset(CS as isize) as u64));
-        return_on_pagefault!(push64(*instruction_pointer));
+        let size = (osize / 8) as i32;
+        let old_cs = *sreg.offset(CS as isize);
+        let return_ip = *instruction_pointer;
+        // both slots, so that a #PF on the second one doesn't leave the first one pushed
+        return_on_pagefault!(writable_or_pagefault(
+            get_stack_pointer64(-2 * size),
+            2 * size
+        ));
+        let cs_slot = get_stack_pointer64(-size);
+        let ip_slot = get_stack_pointer64(-2 * size);
+        match osize {
+            16 => {
+                safe_write16(cs_slot, old_cs as i32).unwrap();
+                safe_write16(ip_slot, return_ip as i32 & 0xFFFF).unwrap();
+            },
+            32 => {
+                safe_write32(cs_slot, old_cs as i32).unwrap();
+                safe_write32(ip_slot, return_ip as i32).unwrap();
+            },
+            _ => {
+                safe_write64(cs_slot, old_cs as u64).unwrap();
+                safe_write64(ip_slot, return_ip).unwrap();
+            },
+        }
+        write_reg64(ESP, read_reg64(ESP).wrapping_sub(2 * size as u64));
     }
 
+    // no exceptions below
+
+    let base = if target_is_64 { 0 } else { info.base() };
     *sreg.offset(CS as isize) = selector as u16 & !3 | *cpl as u16;
     *segment_is_null.offset(CS as isize) = false;
     *segment_limits.offset(CS as isize) = info.effective_limit();
-    *segment_offsets.offset(CS as isize) = 0;
+    *segment_offsets.offset(CS as isize) = base;
     *segment_access_bytes.offset(CS as isize) = info.access_byte();
 
     update_cs_size(info.is_32(), info.is_64());
 
-    *instruction_pointer = rip;
+    *instruction_pointer =
+        if target_is_64 { new_ip } else { (base as u32).wrapping_add(new_ip as u32) as u64 };
 
     update_state_flags();
 }
