@@ -81,7 +81,6 @@ gen_one() {
     if [ $status -ne 0 ] || ! grep -q -- '---END JSON---' "$out" 2>/dev/null; then
         # a fixture without JSON is only valid if the test raised a signal
         if ! grep -q 'signal SIG' "$out" 2>/dev/null; then
-            echo "gen_fixtures_qemu.sh: no usable state for $name (gdb exit $status)" >&2
             rm -f "$out"
         fi
     fi
@@ -91,7 +90,7 @@ export -f gen_one
 
 : > "$build/PROVISIONAL-QEMU-FIXTURES"
 
-n=0
+todo="$(mktemp)"
 for img in "$build"/*.img; do
     name="$(basename "$img" .img)"
     [[ "$name" =~ $filter ]] || continue
@@ -99,8 +98,33 @@ for img in "$build"/*.img; do
     if [ -e "$fixture" ] && [ ! "$img" -nt "$fixture" ]; then
         continue
     fi
-    printf '%s %s\n' "$name" "$n"
-    n=$((n + 1))
-done | xargs -r -P "$jobs" -L1 bash -c 'gen_one "$@"' _
+    echo "$name"
+done > "$todo"
 
-echo "[+] provisional (qemu) fixtures written to $build; do not commit them"
+# One port per test, never reused: a qemu that outlives its test must not be
+# attached to as the next one's.
+awk '{ print $0, NR }' "$todo" | xargs -r -P "$jobs" -L1 bash -c 'gen_one "$@"' _
+
+# Under load, gdb sometimes connects before qemu listens and times out (seen
+# for ~0.5% of tests at 8 jobs). Retry those one at a time, on fresh ports.
+port_offset=$(( $(wc -l < "$todo") + 1 ))
+for attempt in 1 2 3; do
+    while read -r name; do
+        [ -e "$build/$name.fixture" ] && continue
+        gen_one "$name" "$port_offset" < /dev/null # gdb and qemu must not eat the list
+        port_offset=$((port_offset + 1))
+    done < "$todo"
+done
+
+failed=0
+while read -r name; do
+    if [ ! -e "$build/$name.fixture" ]; then
+        echo "gen_fixtures_qemu.sh: no usable state for $name" >&2
+        failed=$((failed + 1))
+    fi
+done < "$todo"
+total=$(wc -l < "$todo")
+rm -f "$todo"
+
+echo "[+] $((total - failed)) of $total provisional (qemu) fixtures written to $build; do not commit them"
+[ "$failed" -eq 0 ]

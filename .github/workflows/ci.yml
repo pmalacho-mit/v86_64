@@ -90,14 +90,17 @@ jobs:
 
       # Publish the real-hardware nasmtests fixtures, so that contributors on
       # non-x86 hosts can run tests/nasm/run.js locally (docs/testing-aarch64.md).
-      # The artifact name is a hash of everything the fixtures are a function of.
+      # images.digest identifies the test images independently of the checkout
+      # path and minor toolchain versions (tests/nasm/img_digest.js); the
+      # artifact name is a hash of it and of the fixture extraction, so it
+      # changes exactly when the fixtures would.
       - name: Collect nasmtests fixtures
         run: |
           cd tests/nasm/build
-          { nasm -v; ld -v; } > toolchain.txt
-          sha256sum *.img > images.sha256
+          { nasm -v; ld -v; gdb --version | head -1; grep -m1 "model name" /proc/cpuinfo; } > toolchain.txt
+          ../img_digest.js > images.digest
           tar czf fixtures.tar.gz *.fixture
-          echo "FIXTURE_KEY=$(cat ../*.asm ../create_tests.js ../rand.js ../header.inc ../footer.inc ../gdb-extract-def ../gen_fixtures.js ../../../gen/x86_table.js toolchain.txt | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
+          echo "FIXTURE_KEY=$(cat images.digest ../gdb-extract-def ../gen_fixtures.js | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
 
       - name: Upload nasmtests fixtures
         uses: actions/upload-artifact@v4
@@ -105,8 +108,26 @@ jobs:
           name: nasmtests-fixtures-${{ env.FIXTURE_KEY }}
           path: |
             tests/nasm/build/fixtures.tar.gz
-            tests/nasm/build/images.sha256
+            tests/nasm/build/images.digest
             tests/nasm/build/toolchain.txt
+          retention-days: 30
+
+      # 64-bit fuzz cases against this runner's real x86 CPU (tests/fuzz/hw.js).
+      # Report only for now: v86 has known mismatches (see the log artifact).
+      - name: Run fuzz-hw-tests (64-bit, against the runner's CPU)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          grep -m1 "model name" /proc/cpuinfo
+          make fuzz-hw-tests 2>&1 | tee fuzz-hw.log
+
+      - name: Upload fuzz-hw-tests log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-hw-log
+          path: fuzz-hw.log
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Run rust-test

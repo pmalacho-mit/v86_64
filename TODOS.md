@@ -66,6 +66,7 @@ make nasmtests                     # 32-bit instruction tests vs the host CPU vi
 make nasmtests-force-jit           # the same, forcing JIT compilation
 make longmode-tests                # 64-bit tests: interpreter, JIT_THRESHOLD=1, no chaining,
                                    # ELF64 multiboot, self-IPI
+make fuzz-hw-tests                # 64-bit fuzz cases against the host CPU (tests/fuzz/hw.js)
 make rust-test expect-tests
 make tests                         # guest boots (images: see Readme)
 node tests/kvm-unit-tests/run.mjs tests/kvm-unit-tests/x86/<t>.flat

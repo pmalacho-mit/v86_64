@@ -11,6 +11,21 @@
   locally.** Don't generate fixtures under qemu, except as an explicitly
   *provisional* pre-check for tests you've just written (see
   [Provisional fixtures under qemu](#provisional-fixtures-under-qemu)).
+- **Against real-hardware fixtures, v86 on aarch64 passes 16,509 of 16,529
+  nasmtests**, interpreter and `--force-jit` alike. The 20 failures are a real
+  v86 bug on non-x86 hosts (`sqrt` NaN sign, see the
+  [verification log](#verification-log)).
+- **For 64-bit code, `make fuzz-hw-tests`** compares v86 with a CPU on the
+  64-bit fuzz cases: natively on x86 (CI does this), provisionally under
+  qemu-user here. See [64-bit](#64-bit).
+
+Sources: the measurements below come from
+[isolated-devcontainers-suede PR #53](https://github.com/pmalacho-mit/isolated-devcontainers-suede/pull/53)
+([x86-emulation.md](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/x86-emulation.md),
+[x86-equivalence-evidence.md](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/x86-equivalence-evidence.md)).
+Its `release/emulation-equivalence.sh gen ref` produces real fixtures for any
+v86_64 commit on any x86 machine with Docker, and the PR has the AMD and Intel
+fixture sets for `c394574` attached.
 
 > **For AI agents:** if a change adds or modifies nasm tests (anything under
 > `tests/nasm/` that changes the generated `.img` files, or the instruction
@@ -51,7 +66,13 @@ Xeon Gold 6140, an AMD EPYC 9V74, and qemu-i386 8.2.2 on an aarch64 VM:
 - **The fixtures are a pure function of the inputs** (`tests/nasm/*.asm`,
   `create_tests.js` and its fixed seed, `header.inc`/`footer.inc`,
   `gdb-extract-def`, nasm/ld versions). All three machines built byte-identical
-  `.img` files.
+  `.img` files, in `ubuntu:24.04` with the repository at `/src`. The path
+  matters: each `.img` embeds the absolute path of its `.asm` (a FILE symbol),
+  so the same tests built elsewhere hash differently. `tests/nasm/img_digest.js`
+  hashes only what is loaded (entry point and allocated sections), which is the
+  same across paths and across nasm 2.16.01/ld 2.42 and nasm 2.16.03/ld 2.44.
+- **Real x86 faulted in 920 of the 3,345 generated x87 tests** (register-stack
+  overflow/underflow), which is why the x87 stack-fault row below is so large.
 - **Intel and AMD produced bit-identical fixtures** for all 16,529. Any real
   x86 CPU is a valid reference.
 - **qemu-emulated fixtures disagree with real hardware on 1,038 tests**, even
@@ -67,6 +88,14 @@ Xeon Gold 6140, an AMD EPYC 9V74, and qemu-i386 8.2.2 on an aarch64 VM:
 
 - **Hidden by `run.js`'s tolerance:** qemu computes `fsin`, `fcos`, `fptan` and
   `fsincos` in double precision (`fptan(π)`: qemu `-1.2e-16`, real `+5.4e-20`).
+- **Below `run.js`'s masks (raw register bits only):** qemu doesn't set the
+  x87 exponent field to all ones on MMX writes (real CPUs do, and so does v86),
+  leaves RF clear in fault frames, misses FPU C1 ("rounded up") and DE,
+  `MXCSR.DE`, and doesn't normalise reserved bits of the control word on
+  `FLDCW`. Intel and AMD agreed on all of it, and their single-step traces
+  differ only in one C1 bit midway through `f2xm1`.
+- **Not observable through qemu's gdb server:** `ftag`, `fiseg`, `fioff`,
+  `foseg`, `fooff` and `fop` always read 0.
 - **Emulated fixtures also have a defect the comparison didn't measure.**
   qemu's gdb server reports the x87 tag word as 0. `gdb-extract-def` therefore
   records stale values for empty st registers where a real fixture says
@@ -81,8 +110,8 @@ as ground truth:
 - That list is a property of these specific random inputs. New tests or seeds
   can hit the categories above.
 - The tag-word defect can produce failures that aren't v86 bugs.
-- How v86_64 itself fares against emulated versus real fixtures hasn't been
-  measured.
+- v86 against real fixtures: 16,509 of 16,529 (measured here, see the
+  verification log). Against emulated ones: 15,462.
 
 The trustworthy areas by category: integer ALU and flags (except `F6`/`F7 /1`),
 shifts, string ops, MMX and SSE results, and x87 arithmetic, loads and stores
@@ -95,15 +124,22 @@ And you don't need emulated fixtures, because real ones are cheap.
 1. **Real fixtures come from x86 CI.** The `Build and test` job in
    `.github/workflows/ci.yml` generates them on `ubuntu-latest` (x86) and
    uploads them as the artifact `nasmtests-fixtures-<hash>`, where `<hash>`
-   covers every input listed above, so the name changes exactly when the
-   fixtures would. The artifact holds `fixtures.tar.gz` (the `.fixture` files),
-   `images.sha256` (hashes of the `.img` files) and `toolchain.txt` (nasm/ld
-   versions). Running
-   `make nasmtests` on any x86 machine, Intel or AMD, gives the same files.
+   is a hash of the image digests and of the fixture extraction scripts, so
+   the name changes exactly when the fixtures would. The artifact holds
+   `fixtures.tar.gz` (the `.fixture` files), `images.digest`
+   (`tests/nasm/img_digest.js` output) and `toolchain.txt` (nasm, ld, gdb, CPU).
+   Running `make nasmtests` on any x86 machine, Intel or AMD, gives the same
+   fixtures.
 2. **Run locally against them:**
-   - Run `tests/nasm/create_tests.js`, then check your `.img` hashes against
-     the artifact's: `cd tests/nasm/build && sha256sum -c images.sha256`. If
-     they differ, your tests changed and those fixtures are stale; stop.
+   - Run `tests/nasm/create_tests.js`, then check your images against the
+     artifact's: `tests/nasm/img_digest.js --check images.digest`. If any
+     differ, your tests changed (or your nasm encodes differently) and those
+     fixtures are stale for them; stop.
+   - With the fixture sets attached to suede PR #53 (`IMG_SHA256`, plain
+     sha256 of images built at `/src`), build the same way to compare:
+     `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src/tests/nasm -e PATH=/opt/x86ld:/usr/bin:/bin v86-qemu-gdb node create_tests.js`
+     (the `v86-qemu-gdb` image from the next section),
+     then `cd tests/nasm/build && sha256sum -c IMG_SHA256`.
    - Unpack the fixtures into `tests/nasm/build/`
      (`tar xzf fixtures.tar.gz -C tests/nasm/build`) and run `tests/nasm/run.js` (and
      `tests/nasm/run.js --force-jit`). This runs all 16,529 tests here, against
@@ -140,7 +176,8 @@ Use a *native* aarch64 container (or host) with `qemu-user-static` and
 docker build -t v86-qemu-gdb - <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    nasm binutils qemu-user-static gdb-multiarch ca-certificates && rm -rf /var/lib/apt/lists/*
+    nasm binutils binutils-x86-64-linux-gnu qemu-user-static gdb-multiarch nodejs ca-certificates \
+ && rm -rf /var/lib/apt/lists/* && mkdir -p /opt/x86ld && ln -s /usr/bin/x86_64-linux-gnu-ld /opt/x86ld/ld
 EOF
 
 # create the .img files (on the host, with the ld shim from above) ...
@@ -160,6 +197,10 @@ TEST_NAME='^(fptan|cmpxchg8b)\.img' tests/nasm/run.js
 attaches `gdb-multiarch`, continues to the `loop` breakpoint (or the first
 SIGILL/SIGFPE/SIGSEGV/SIGBUS) and runs `gdb-extract-def`'s `extract-state`,
 rewritten on the fly so that `run` becomes `target remote` + `continue`.
+Each test gets its own port (a qemu that outlives its test must never be
+attached to as the next one's), and tests whose gdb couldn't connect are
+retried one at a time, up to three times; the script fails if any fixture is
+still missing.
 `gdb-qemu-x87.py` classifies x87 registers from their raw bits, because
 qemu reports the tag word as 0 and gdb aborts printing the unsupported 80-bit
 values that MMX initialisation leaves in st0-st7 (nearly every generated test
@@ -201,18 +242,50 @@ register-stack tag word and `fop` always read 0 there.
 
 ## 64-bit
 
-The measurement covered 32-bit code through `qemu-i386`. `qemu-x86_64` uses the
-same TCG front end, so expect the same kinds of problems (x87 stack faults,
-transcendental precision, decode corner cases), but it wasn't measured. When
-long mode needs new expected values, get them from real x86. For example, a CI
-job that runs a 64-bit nasm test under gdb, the same way `gen_fixtures.js` does
-for 32-bit. **Don't take them from `qemu-x86_64`.**
+The nasmtests are 32-bit only, and their measurement covered `qemu-i386`.
+For long mode there is `make fuzz-hw-tests` (`tests/fuzz/hw.js`):
+
+- It takes the 64-bit cases of the instruction fuzzer (`tests/fuzz/gen_case.js`:
+  random encodings with REX, r8-r15, xmm8-15, RIP-relative and 0x67
+  addressing, random GPR/x87/MMX/XMM/flags/MXCSR state), 27,429 of them by
+  default, and runs each one twice: in v86, and as a ring-3 Linux process on
+  an x86-64 CPU (`tests/fuzz/hw/runner.c`, a freestanding static binary that
+  reads the final state from the signal context, so no gdb is involved).
+  The final registers, flags, x87/MMX/XMM state, MXCSR, scratch memory and
+  exception vector are compared.
+- `tests/fuzz/run.js` only compares v86's interpreter with its JIT, so it
+  can't see bugs both share. This can.
+- **On x86-64 Linux the CPU is the reference.** CI runs it on GitHub's x86
+  runners (report only for now, see the `fuzz-hw-log` artifact). On aarch64,
+  `make fuzz-hw-tests` runs the runner under qemu-user
+  (`docker run --platform linux/amd64`), which is **provisional**: the script
+  detects it (qemu doesn't report `trapno`) and says so.
+- Differences that come from the environment rather than the CPU (ring 3 vs
+  ring 0, the first 64 KiB that Linux can't map, environment-dependent
+  instructions such as `cpuid`, `pushf`, segment selectors and FPU
+  environment stores) are excluded or reported as *inconclusive*; documented
+  v86 limitations are reported as *known*. Only the rest are mismatches.
+
+**qemu-x86_64 8.2.2 defects found this way** (in addition to the 32-bit
+list above, which applies too; `hw.js` filters these when the reference is
+qemu):
+
+| Defect | How it shows |
+|---|---|
+| `trapno` is -1 in the signal context | the vector has to be inferred from the signal |
+| A non-canonical address faults like an unmapped one (`SEGV_MAPERR` with the address) | looks like #PF; real CPUs raise #GP |
+| REX.R/REX.B are applied to MMX register operands of some instructions | `41 0F 38 04 C0` (`pmaddubsw mm0, mm0`) yields 0; without the REX byte it's correct |
+| MMX writes leave the x87 exponent at 0 | real CPUs and v86 set it to `0xffff` |
+
+When long mode needs new hard-coded expected values (`tests/longmode/`), take
+them from real x86, never from `qemu-x86_64`.
 
 ## Verification log
 
 What was run to check the qemu + gdb approach, on an aarch64 devcontainer
 (Debian trixie, Node 24, rustc 1.99, nasm 2.16.03) with `ubuntu:24.04` as the
-qemu/gdb container (qemu-i386 8.2.2, gdb 15.1), v86_64 at `99e5057`:
+qemu/gdb container (qemu-i386 8.2.2, gdb 15.1), v86_64 at `99e5057` plus this
+branch:
 
 - **Single-stepping works.** `qemu-i386-static -g` plus `gdb-multiarch`
   `stepi` walked a 21-instruction test from `main` to `loop`, with correct
@@ -240,9 +313,28 @@ qemu/gdb container (qemu-i386 8.2.2, gdb 15.1), v86_64 at `99e5057`:
   20 + 9): the same set, found independently. This is the expected outcome, and
   it is why these fixtures are provisional only. It does **not** show that v86
   passes against real hardware.
-- **Not verified:** a run of `run.js` against real-hardware fixtures (no x86
-  machine was available), and the CI artifact step in `ci.yml` (it can only run
-  on GitHub). `qemu-x86_64` for 64-bit tests was not tried.
+- **`run.js` against real-hardware fixtures:** the AMD EPYC 9V74 and Intel
+  Xeon Gold 6140 sets attached to suede PR #53 (`c394574`; the nasm test
+  inputs are unchanged since). All 16,529 images, built in `ubuntu:24.04` at
+  `/src`, matched their `IMG_SHA256`. **16,509 of 16,529 pass**, with both
+  fixture sets, with and without `--force-jit`. The 20 failures are exactly
+  the `sqrt` NaN-sign row above.
+- **`make fuzz-hw-tests` under qemu-user** (`qemu-x86_64-static` 8.2.2 from the
+  VM's binfmt registration), 27,429 cases, interpreter: 20,635 match, 1,596
+  mismatch, 2,487 known v86 limitations (2,433 misaligned SSE operands without
+  #GP, 54 NaN sign), 2,711 inconclusive (2,461 of them the qemu REX/MMX
+  defect). The runner takes about 20 s, the comparison about 50 s.
+  Mismatches that are certain v86 bugs, because the SDM is unambiguous: in
+  64-bit mode v86 executes `06`, `0E`, `16`, `1E` (push segment register),
+  `60`, `61`, `82`, `D4` and `D5` instead of raising #UD. The rest (SSE
+  rounding modes, NaN propagation, some MMX and flag results) need the real
+  x86 run in CI to decide.
+- **`--jit`:** 148 of the cases crash the JIT with an invalid wasm module
+  (`i64.store[0] expected type i32, found i64.load`). `tests/fuzz/run.js`
+  reproduces it (`TEST_NAME='^fuzz64_33_r_32r_2\+2$'`), so it's a JIT bug
+  at this commit, independent of this tooling.
+- **Not verified:** the CI steps in `ci.yml` (fixture artifact, fuzz-hw-tests),
+  which only run on GitHub.
 
 Other things found while doing this on aarch64:
 

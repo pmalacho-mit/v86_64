@@ -56,6 +56,7 @@ make all                   # release build, including build/v86-mem64.wasm
 make rust-test expect-tests
 make nasmtests nasmtests-force-jit   # needs nasm + gdb
 make longmode-tests
+make fuzz-hw-tests          # 64-bit fuzz cases vs the host CPU (provisional under qemu on aarch64)
 make tests                 # guest boots; images aren't in the repo (see Readme)
 ```
 
