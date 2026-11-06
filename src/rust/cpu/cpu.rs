@@ -807,8 +807,9 @@ unsafe fn get_tss_rsp64(dpl: u8) -> OrPageFault<u64> {
 /// The ISTn stack pointer from the 64-bit TSS (ist is 1-7).
 unsafe fn get_tss_ist64(ist: u8) -> OrPageFault<u64> {
     dbg_assert!(ist >= 1 && ist <= 7);
-    // 64-bit TSS: reserved@0x00, RSP0..2 at 0x04, IST1..7 at 0x1C
-    let offset = 0x1cu32 + ((ist as u32 - 1) << 3);
+    // 64-bit TSS (Intel SDM Vol. 3A, Figure 8-11): reserved at 0x00, RSP0-2 at
+    // 0x04/0x0C/0x14, reserved at 0x1C, IST1-7 at 0x24-0x54
+    let offset = 0x24u32 + ((ist as u32 - 1) << 3);
     if offset + 7 > *segment_limits.offset(TR as isize) {
         trigger_ts(0);
         return Err(());
