@@ -491,13 +491,19 @@ function classify(c, hw, v)
         {
             return { verdict: "inconclusive", why: "access below 0x10000 (mapped in v86, not mappable in Linux)" };
         }
-        if(hw_vector === 13 && v_vector === null)
+        // #GP on the reference at an instruction that v86 runs past. Whatever
+        // v86 does after it follows from that: it finishes the body, or it
+        // faults on a later instruction (say one that is invalid in 64-bit
+        // mode). Bodies have no control flow of their own (DENY_OPCODES in
+        // gen_case.js), so later means a higher address.
+        const hw_rip = Number(hw.gregs[GREG.rip]);
+        if(hw_vector === 13 && (v_vector === null || v.exception.eip > hw_rip))
         {
             // A legacy SSE instruction with a 128-bit memory operand: almost
             // certainly misaligned (#GP on real CPUs; v86 doesn't check).
             // Imprecise (a missed non-canonical #GP on such an instruction
             // would land here too), hence reported in its own category.
-            const d = decode_at(c, Number(hw.gregs[GREG.rip]));
+            const d = decode_at(c, hw_rip);
             const sse_ps = [0x0F28, 0x0F29, 0x0F2B, 0x0F14, 0x0F15, 0x0FC2, 0x0FC6].includes(d.opcode) ||
                 d.opcode >= 0x0F51 && d.opcode <= 0x0F5F;
             const sse128 = d.prefixes.has(0x66) && d.opcode > 0x0F00 && !d.prefixes.has(0xF2) && !d.prefixes.has(0xF3) ||

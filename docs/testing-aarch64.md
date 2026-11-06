@@ -333,6 +333,14 @@ branch:
   (`i64.store[0] expected type i32, found i64.load`). `tests/fuzz/run.js`
   reproduces it (`TEST_NAME='^fuzz64_33_r_32r_2\+2$'`), so it's a JIT bug
   at this commit, independent of this tooling.
+- **After #9.** v86 now raises #UD for every opcode that is invalid in
+  64-bit mode. When the reference takes #GP at an instruction that v86 runs
+  past, `classify()` now also accepts v86 faulting at a *later* instruction,
+  not only finishing the body. This affected 80 cases (55 later #UD, 21 #PF,
+  4 #DE), all behind a misaligned legacy-SSE operand. Results: interpreter
+  21,113 match, 1,048 mismatch, 2,556 known, 2,712 inconclusive. `--jit`:
+  20,977 match, 1,046 mismatch, 2,552 known, 2,706 inconclusive, and the same
+  148 crashes. No case is left where the reference raises #UD and v86 doesn't.
 - **Not verified:** the CI steps in `ci.yml` (fixture artifact, fuzz-hw-tests),
   which only run on GitHub.
 

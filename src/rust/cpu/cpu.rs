@@ -5189,6 +5189,21 @@ pub unsafe fn trigger_ud() {
     call_interrupt_vector(CPU_EXCEPTION_UD, false, None);
 }
 
+/// For the opcodes that are invalid in 64-bit mode ("i64" in Intel SDM Vol. 2, Table A-2):
+/// raise #UD in 64-bit mode and return true, so that the handler returns without running the
+/// instruction. Their 64-bit operand size handlers (REX.W, instructions_64.rs) raise #UD
+/// unconditionally; the handlers that 64-bit code shares with 16/32-bit code (no prefix, 0x66,
+/// REX without W, and the opcodes without an operand size) call this first. Compatibility mode
+/// isn't 64-bit mode: there they run as in protected mode
+#[inline]
+pub unsafe fn trigger_ud_if_64() -> bool {
+    if *is_64 {
+        trigger_ud();
+        return true;
+    }
+    false
+}
+
 #[inline(never)]
 pub unsafe fn trigger_nm() {
     dbg_log!("#nm eip={:x}", *previous_ip);

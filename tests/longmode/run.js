@@ -191,10 +191,29 @@ const expected = [
     7n,                  // 156: lock cmpxchg m64 (equal) after a write #PF: memory
     5n,                  // 157: ... rax
     1n,                  // 158: ... ZF set
-    // 159-180: reserved for the checks of issue #9 (159-164) and issue #8 (165-180), not
-    // written here
-    0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n,
-    0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    // 159-162: opcodes invalid in 64-bit mode raise #UD, one bit per encoding (UD64_VARIANT)
+    0x1FFFFFFFFFFFn,     // 159: without prefix
+    0x1FFFFFFFFFFFn,     // 160: with 66
+    0x1FFFFFFFFFFFn,     // 161: with REX (40)
+    0x1FFFFFFFFFFFn,     // 162: with REX.W (48)
+    3n,                  // 163: compatibility mode runs them (passes that reached the end)
+    0n,                  // 164: compatibility mode: eip of a #UD (none)
+    0x0123456789ABCDEFn, // 165: movaps xmm2, xmm4 (0F 29, register form): low qword
+    0xFEDCBA9876543210n, // 166: movaps xmm2, xmm4 (0F 29, register form): high qword
+    0x0123456789ABCDEFn, // 167: movups xmm5, xmm2 (0F 11, register form): low qword
+    0xFEDCBA9876543210n, // 168: movups xmm5, xmm2 (0F 11, register form): high qword
+    0x0123456789ABCDEFn, // 169: movdqa xmm6, xmm5 (66 0F 7F, register form): low qword
+    0xFEDCBA9876543210n, // 170: movdqa xmm6, xmm5 (66 0F 7F, register form): high qword
+    0x0123456789ABCDEFn, // 171: movdqu xmm7, xmm6 (F3 0F 7F, register form): low qword
+    0xFEDCBA9876543210n, // 172: movdqu xmm7, xmm6 (F3 0F 7F, register form): high qword
+    0x0123456789ABCDEFn, // 173: movaps xmm9, xmm7 (41 0F 29): low qword
+    0xFEDCBA9876543210n, // 174: movaps xmm9, xmm7 (41 0F 29): high qword
+    0x0123456789ABCDEFn, // 175: movups xmm10, xmm9 (45 0F 11): low qword
+    0xFEDCBA9876543210n, // 176: movups xmm10, xmm9 (45 0F 11): high qword
+    0x0123456789ABCDEFn, // 177: movdqa xmm0, xmm10 (66 44 0F 7F): low qword
+    0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
+    0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
+    0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
     // 181-191: far call/jmp through a memory far pointer (FF /3, FF /5) in 64-bit mode, see
     // T181_RESULT: bits 0-15 bytes pushed, 16-31 cs in the target, 32-47 pushed cs, 48 pushed
     // return address, 56 rsp restored by the retf back
