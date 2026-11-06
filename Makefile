@@ -422,6 +422,7 @@ longmode-tests: build/v86-debug.wasm
 	JIT_THRESHOLD=1 ./tests/longmode/run.js
 	JIT_THRESHOLD=1 JIT64_CHAINING=0 ./tests/longmode/run.js
 	JIT_THRESHOLD=1 JIT32_CHAINING=0 ./tests/longmode/run.js
+	./tests/longmode/jit64-validate.js
 	./tests/longmode/restart.js
 	JIT_THRESHOLD=1 ./tests/longmode/restart.js
 	JIT_THRESHOLD=1 JIT64_CHAINING=0 ./tests/longmode/restart.js

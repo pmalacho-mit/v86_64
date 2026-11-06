@@ -65,6 +65,7 @@ make build/v86-mem64-debug.wasm    # mem64 build (guest RAM > 3 GiB)
 make nasmtests                     # 32-bit instruction tests vs the host CPU via gdb
 make nasmtests-force-jit           # the same, forcing JIT compilation
 make longmode-tests                # 64-bit tests: interpreter, JIT_THRESHOLD=1, no chaining,
+                                   # every jit64 encoding compiles to a valid module,
                                    # ELF64 multiboot, self-IPI
 make fuzz-hw-tests                # 64-bit fuzz cases against the host CPU (tests/fuzz/hw.js)
 make rust-test expect-tests
@@ -118,6 +119,10 @@ nasm suite, both variants, after every non-trivial change.
 6. For native JIT code, add it to `gen/generate_jit64.js`. Otherwise the
    instruction is compiled as a call of a generated wrapper around the
    interpreter handler, which is correct but slower.
+   `tests/longmode/jit64-validate.js` compiles every encoding in the table
+   and checks that the generated modules validate (a module the host
+   refuses ends the emulator), but it doesn't run them: the checks in
+   `longmode.asm` do that.
 7. Add a check to `tests/longmode/longmode.asm` (store a qword at
    `[r15 + N*8]` and add the expected value in `run.js`).
 

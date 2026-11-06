@@ -191,6 +191,25 @@ const expected = [
     7n,                  // 156: lock cmpxchg m64 (equal) after a write #PF: memory
     5n,                  // 157: ... rax
     1n,                  // 158: ... ZF set
+    // 159-164: reserved for the checks of issue #9 (#UD for opcodes invalid in 64-bit mode),
+    // not written here
+    0n, 0n, 0n, 0n, 0n, 0n,
+    0x0123456789ABCDEFn, // 165: movaps xmm2, xmm4 (0F 29, register form): low qword
+    0xFEDCBA9876543210n, // 166: movaps xmm2, xmm4 (0F 29, register form): high qword
+    0x0123456789ABCDEFn, // 167: movups xmm5, xmm2 (0F 11, register form): low qword
+    0xFEDCBA9876543210n, // 168: movups xmm5, xmm2 (0F 11, register form): high qword
+    0x0123456789ABCDEFn, // 169: movdqa xmm6, xmm5 (66 0F 7F, register form): low qword
+    0xFEDCBA9876543210n, // 170: movdqa xmm6, xmm5 (66 0F 7F, register form): high qword
+    0x0123456789ABCDEFn, // 171: movdqu xmm7, xmm6 (F3 0F 7F, register form): low qword
+    0xFEDCBA9876543210n, // 172: movdqu xmm7, xmm6 (F3 0F 7F, register form): high qword
+    0x0123456789ABCDEFn, // 173: movaps xmm9, xmm7 (41 0F 29): low qword
+    0xFEDCBA9876543210n, // 174: movaps xmm9, xmm7 (41 0F 29): high qword
+    0x0123456789ABCDEFn, // 175: movups xmm10, xmm9 (45 0F 11): low qword
+    0xFEDCBA9876543210n, // 176: movups xmm10, xmm9 (45 0F 11): high qword
+    0x0123456789ABCDEFn, // 177: movdqa xmm0, xmm10 (66 44 0F 7F): low qword
+    0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
+    0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
+    0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
 ];
 
 const emulator = new V86({
