@@ -1978,6 +1978,405 @@ t165_loop:
     mov [r15 + 179*8], rbx
     pextrq rbx, xmm11, 1
     mov [r15 + 180*8], rbx
+
+    ; test 181-193: far call/jmp through a memory far pointer (FF /3, FF /5) in 64-bit mode, with
+    ; each operand size (issue #11). In group 5 only near call/jmp and push default to a 64-bit
+    ; operand size (Intel SDM Vol. 2, Table A-6): without REX.W the operand is m16:32 (m16:16
+    ; with 66), and a far call pushes cs and the return address as two dwords (words) on the
+    ; 64-bit stack. The target can be a 64-bit or a compatibility mode code segment. Each pass
+    ; of 181-191 is one transfer, see T181_RESULT; 192 has one bit per transfer that must fault,
+    ; see T181_FAULT. Three passes, so that the jits run it too
+    jmp t181_start
+
+%define T181_RSP 0xD000                 ; rsp before the transfer
+%define T181_TRSP 0xD008                ; rsp (esp) in the target
+%define T181_TCS 0xD010                 ; cs in the target
+%define T181_BACK 0xD018                ; m16:32 0x08:<resume point>, for compatibility mode targets
+%define T181_PASS 0xD020                ; passes left
+%define T181_GDTR 0xD030
+%define T181_TSS 0xD100                 ; 64-bit TSS: IST1 for the #PF handler
+%define T181_ISTACK 0xD800
+%define T181_HISTACK 0x8000068000       ; rsp above 4 GiB: PML4[1] aliases the low 1 GiB
+%define T181_PAD 0x100000               ; linear address of 0x20:0x10000 (beyond its limit)
+
+%macro T181_FP16 3                      ; label, offset, selector
+%1: dw %2, %3
+%endmacro
+%macro T181_FP32 3
+%1: dd %2
+    dw %3
+%endmacro
+%macro T181_FP64 3
+%1: dq %2
+    dw %3
+%endmacro
+
+%macro T181_GATE 3                      ; vector, handler, ist (clobbers rax, rdi)
+    mov rax, %2
+    mov rdi, 0x6000 + %1*16
+    mov word [rdi], ax                  ; offset 15:0
+    mov word [rdi + 2], 0x08            ; selector
+    mov byte [rdi + 4], %3              ; ist
+    mov byte [rdi + 5], 0x8E            ; P|dpl0|interrupt gate
+    shr rax, 16
+    mov word [rdi + 6], ax              ; offset 31:16
+    shr rax, 16
+    mov qword [rdi + 8], rax            ; offset 63:32
+%endmacro
+
+; before a transfer: the target stores its rsp (esp) and cs at T181_TRSP and T181_TCS
+%macro T181_PREP 0
+    mov qword [abs T181_TRSP], 0
+    mov qword [abs T181_TCS], 0
+    mov [abs T181_RSP], rsp
+%endmacro
+
+; the resume point %1 after a transfer: the target of the far jmp through T181_BACK of the
+; compatibility mode targets and of the 64-bit targets' jmp r10, and where the fault handlers
+; resume (so that a transfer that faults shows up as a wrong result)
+%macro T181_RESUME 1
+    lea r10, [rel %1]
+    mov [abs T181_BACK], r10d
+%endmacro
+; at the resume point: the upper halves of rsp and r15 aren't preserved in compatibility mode
+%macro T181_BACK64 0
+    mov rsp, [abs T181_RSP]
+    mov r15, RESULTS
+%endmacro
+
+; result %1 of a transfer that pushed two slots of %2 bytes (0: a jmp), %3 = its return address:
+; bits 0-15: rsp before minus rsp in the target (0xFFFF if not in 0-0xFFFF), 16-31: cs in the
+; target, 32-47: the pushed cs (the low word of its slot), 48: the pushed return address is the
+; low %2 bytes of %3, 56 (T181_RETURNED): the retf back to %3 restored rsp
+%macro T181_RESULT 3
+    mov rax, [abs T181_RSP]
+    sub rax, [abs T181_TRSP]
+    cmp rax, 0xFFFF
+    jbe %%delta
+    mov eax, 0xFFFF
+%%delta:
+    mov rdx, [abs T181_TCS]
+    shl rdx, 16
+    or rax, rdx
+%if %2 != 0
+    mov rsi, [abs T181_RSP]
+    movzx edx, word [rsi - %2]
+    shl rdx, 32
+    or rax, rdx
+    lea rdx, [rel %3]
+  %if %2 == 2
+    cmp dx, [rsi - 4]
+  %elif %2 == 4
+    cmp edx, [rsi - 8]
+  %else
+    cmp rdx, [rsi - 16]
+  %endif
+    jne %%ret
+    bts rax, 48
+%%ret:
+%endif
+    mov [r15 + %1*8], rax
+%endmacro
+; rcx: rsp right after the retf (T181_RESULT leaves it alone)
+%macro T181_RETURNED 1
+    cmp rcx, [abs T181_RSP]
+    jne %%no
+    bts qword [r15 + %1*8], 56
+%%no:
+%endmacro
+
+; the transfer %3 must raise %2 (vector << 32 | error code) with the saved rip at its first byte
+; and rsp unchanged, otherwise bit %1 of result 192 is cleared. The handlers resume at r10, as
+; does a transfer that runs (its target is t181_land64, or T181_PAD through T181_BACK)
+%macro T181_FAULT 3+
+    T181_RESUME %%done
+    mov r11, -1
+    xor r9d, r9d
+    mov r12, rsp
+%%insn:
+    %3
+%%done:
+    lea rax, [rel %%insn]
+    cmp r9, rax
+    jne %%bad
+    cmp rsp, r12
+    jne %%bad
+    mov rax, %2
+    cmp r11, rax
+    je %%ok
+%%bad:
+    mov r15, RESULTS
+    btr qword [r15 + 192*8], %1
+%%ok:
+    mov rsp, r12
+%endmacro
+
+    ; the far pointers
+    T181_FP32 t181_p_c18_ret, t181_compat_ret, 0x18
+    T181_FP32 t181_p_c18, t181_compat, 0x18
+    T181_FP32 t181_p_c20_ret, t181_compat_ret - 0xF0000, 0x20
+    T181_FP32 t181_p_64, t181_target64, 0x08
+    T181_FP16 t181_p16_c20, t181_compat - 0xF0000, 0x20
+    T181_FP64 t181_p64_c18, t181_compat, 0x18
+    T181_FP64 t181_p64_64_ret, t181_target64_ret, 0x08
+    T181_FP64 t181_p64_64, t181_target64, 0x08
+    T181_FP32 t181_f_null, t181_land64, 0x0000
+    T181_FP32 t181_f_null3, t181_land64, 0x0003
+    T181_FP32 t181_f_data, t181_land64, 0x0010
+    T181_FP32 t181_f_limit, t181_land64, 0x0050
+    T181_FP32 t181_f_ldt, t181_land64, 0x000C
+    T181_FP32 t181_f_ld, t181_land64, 0x0028
+    T181_FP32 t181_f_np, t181_land64, 0x0030
+    T181_FP32 t181_f_dpl3, t181_land64, 0x0038
+    T181_FP32 t181_f_rpl3, t181_land64, 0x000B
+    T181_FP32 t181_f_tss, t181_land64, 0x0040
+    T181_FP32 t181_f_eip, 0x10000, 0x0020
+    T181_FP64 t181_f64_canon, 0x0000800000000000, 0x0008
+    T181_FP64 t181_f64_np, t181_land64, 0x0030
+    T181_FP16 t181_f16_data, 0, 0x0010
+    T181_FP16 t181_f16_np, 0, 0x0030
+
+    ; 64-bit targets: store rsp and cs, return with jmp r10 (or retfq)
+t181_target64:
+    mov [abs T181_TRSP], rsp
+    xor eax, eax
+    mov ax, cs
+    mov [abs T181_TCS], rax
+    jmp r10
+t181_target64_ret:
+    mov [abs T181_TRSP], rsp
+    xor eax, eax
+    mov ax, cs
+    mov [abs T181_TCS], rax
+    o64 retf
+t181_land64:
+    jmp r10
+
+    ; #NP, #GP and #PF (IST1) handlers: r11 <- vector << 32 | error code, r9 <- the saved rip,
+    ; resume at 0x08:r10 (RF cleared, see ud_handler of test 159)
+t181_np:
+    mov r11d, 11
+    jmp t181_fault
+t181_gp:
+    mov r11d, 13
+    jmp t181_fault
+t181_pf:
+    mov r11d, 14
+t181_fault:
+    shl r11, 32
+    or r11, [rsp]
+    mov r9, [rsp + 8]
+    add rsp, 8
+    mov [rsp], r10
+    mov qword [rsp + 8], 0x08
+    and qword [rsp + 16], ~0x10000
+    iretq
+
+[bits 32]
+    ; compatibility mode targets (cs 0x18, or 0x20 with base 0xF0000), on their own page: store
+    ; esp and cs, return with a far jmp through T181_BACK (or retf)
+    align 0x1000, db 0xCC
+t181_compat:
+    mov [T181_TRSP], esp
+    xor eax, eax
+    mov ax, cs
+    mov [T181_TCS], eax
+    jmp far [T181_BACK]
+t181_compat_ret:
+    mov [T181_TRSP], esp
+    xor eax, eax
+    mov ax, cs
+    mov [T181_TCS], eax
+    retf
+    align 0x1000, db 0xCC
+
+[bits 64]
+t181_start:
+    ; GDT: 0x18 32-bit code, 0x20 32-bit code with base 0xF0000 and limit 0xFFFF, 0x28 code with
+    ; L and D set, 0x30 64-bit code (not present), 0x38 64-bit code (dpl 3), 0x40 64-bit TSS
+    mov rax, 0x00CF9A000000FFFF
+    mov [abs 0x818], rax
+    mov rax, 0x00409A0F0000FFFF
+    mov [abs 0x820], rax
+    mov rax, 0x00EF9A000000FFFF
+    mov [abs 0x828], rax
+    mov rax, 0x00AF1A000000FFFF
+    mov [abs 0x830], rax
+    mov rax, 0x00AFFA000000FFFF
+    mov [abs 0x838], rax
+    mov rax, 0x0000890000000067 | (T181_TSS << 16)
+    mov [abs 0x840], rax
+    mov qword [abs 0x848], 0
+    mov word [abs T181_GDTR], 10*8 - 1
+    mov qword [abs T181_GDTR + 2], 0x800
+    lgdt [abs T181_GDTR]
+    ; the TSS: IST1 at 0x24 (v86 reads IST1 from 0x1C, the reserved qword before it, so that has
+    ; the same value), no I/O bitmap
+    mov rdi, T181_TSS
+    xor eax, eax
+    mov ecx, 0x68 / 8
+    rep stosq
+    mov qword [abs T181_TSS + 0x1C], T181_ISTACK
+    mov qword [abs T181_TSS + 0x24], T181_ISTACK
+    mov word [abs T181_TSS + 0x66], 0x68
+    mov ax, 0x40
+    ltr ax
+    T181_GATE 11, t181_np, 0
+    T181_GATE 13, t181_gp, 0
+    T181_GATE 14, t181_pf, 1
+    mov dword [abs 0x1000 + 1*8], 0x2007            ; PML4[1] (see test 71)
+    mov word [abs T181_BACK + 4], 0x08
+    mov word [abs T181_PAD], 0x2DFF                 ; jmp far [T181_BACK] (32-bit)
+    mov dword [abs T181_PAD + 2], T181_BACK
+    mov qword [r15 + 193*8], 0
+    mov dword [abs T181_PASS], 3
+
+t181_pass:
+    xor eax, eax
+    lea rdi, [r15 + 181*8]
+    mov ecx, 11
+    rep stosq
+    mov qword [r15 + 192*8], (1 << 25) - 1
+
+    ; 181: call m16:32 (FF /3) to compatibility mode, back with retf
+    T181_PREP
+    T181_RESUME t181_r181
+    call far dword [rel t181_p_c18_ret]
+t181_r181:
+    mov rcx, rsp
+    T181_BACK64
+    T181_RESULT 181, 4, t181_r181
+    T181_RETURNED 181
+
+    ; 182: jmp m16:32 (FF /5) to compatibility mode
+    T181_PREP
+    T181_RESUME t181_r182
+    jmp far dword [rel t181_p_c18]
+t181_r182:
+    T181_BACK64
+    T181_RESULT 182, 0, 0
+
+    ; 183: call m16:32 to compatibility mode, a segment with a base, back with retf
+    T181_PREP
+    T181_RESUME t181_r183
+    call far dword [rel t181_p_c20_ret]
+t181_r183:
+    mov rcx, rsp
+    T181_BACK64
+    T181_RESULT 183, 4, t181_r183
+    T181_RETURNED 183
+
+    ; 184-185: call/jmp m16:32 to 64-bit code, with rsp above 4 GiB
+    mov r13, rsp
+    mov rsp, T181_HISTACK
+    T181_PREP
+    T181_RESUME t181_r184
+    call far dword [rel t181_p_64]
+t181_r184:
+    T181_BACK64
+    T181_RESULT 184, 4, t181_r184
+    T181_PREP
+    T181_RESUME t181_r185
+    jmp far dword [rel t181_p_64]
+t181_r185:
+    T181_BACK64
+    T181_RESULT 185, 0, 0
+    mov rsp, r13
+
+    ; 186-187: call/jmp m16:16 (66 FF /3, 66 FF /5) to compatibility mode
+    T181_PREP
+    T181_RESUME t181_r186
+    call far word [rel t181_p16_c20]
+t181_r186:
+    T181_BACK64
+    T181_RESULT 186, 2, t181_r186
+    T181_PREP
+    T181_RESUME t181_r187
+    jmp far word [rel t181_p16_c20]
+t181_r187:
+    T181_BACK64
+    T181_RESULT 187, 0, 0
+
+    ; 188: call m16:64 (REX.W FF /3) to compatibility mode
+    T181_PREP
+    T181_RESUME t181_r188
+    call far qword [rel t181_p64_c18]
+t181_r188:
+    T181_BACK64
+    T181_RESULT 188, 8, t181_r188
+
+    ; 189-190: call (back with retfq)/jmp m16:64 to 64-bit code, with rsp above 4 GiB
+    mov r13, rsp
+    mov rsp, T181_HISTACK
+    T181_PREP
+    T181_RESUME t181_r189
+    call far qword [rel t181_p64_64_ret]
+t181_r189:
+    mov rcx, rsp
+    T181_BACK64
+    T181_RESULT 189, 8, t181_r189
+    T181_RETURNED 189
+    T181_PREP
+    T181_RESUME t181_r190
+    jmp far qword [rel t181_p64_64]
+t181_r190:
+    T181_BACK64
+    T181_RESULT 190, 0, 0
+    mov rsp, r13
+
+    ; 191: jmp m16:64 (REX.W FF /5) to compatibility mode
+    T181_PREP
+    T181_RESUME t181_r191
+    jmp far qword [rel t181_p64_c18]
+t181_r191:
+    T181_BACK64
+    T181_RESULT 191, 0, 0
+
+    ; 192: transfers that fault
+    T181_FAULT 0, 13 << 32 | 0, call far dword [rel t181_f_null]
+    T181_FAULT 1, 13 << 32 | 0, jmp far dword [rel t181_f_null3]
+    T181_FAULT 2, 13 << 32 | 0x10, call far dword [rel t181_f_data]
+    T181_FAULT 3, 13 << 32 | 0x10, jmp far dword [rel t181_f_data]
+    T181_FAULT 4, 13 << 32 | 0x50, call far dword [rel t181_f_limit]        ; beyond the GDT
+    T181_FAULT 5, 13 << 32 | 0x0C, call far dword [rel t181_f_ldt]          ; no LDT
+    T181_FAULT 6, 13 << 32 | 0x28, call far dword [rel t181_f_ld]           ; L and D set
+    T181_FAULT 7, 13 << 32 | 0x28, jmp far dword [rel t181_f_ld]
+    T181_FAULT 8, 11 << 32 | 0x30, call far dword [rel t181_f_np]           ; not present
+    T181_FAULT 9, 11 << 32 | 0x30, jmp far dword [rel t181_f_np]
+    T181_FAULT 10, 13 << 32 | 0x38, call far dword [rel t181_f_dpl3]        ; dpl != cpl
+    T181_FAULT 11, 13 << 32 | 0x08, call far dword [rel t181_f_rpl3]        ; rpl > cpl
+    T181_FAULT 12, 13 << 32 | 0x40, call far dword [rel t181_f_tss]         ; no task switches
+    T181_FAULT 13, 13 << 32 | 0x40, jmp far dword [rel t181_f_tss]
+    T181_FAULT 14, 13 << 32 | 0, call far dword [rel t181_f_eip]            ; beyond cs limit
+    T181_FAULT 15, 13 << 32 | 0, jmp far dword [rel t181_f_eip]
+    T181_FAULT 16, 13 << 32 | 0, call far qword [rel t181_f64_canon]        ; non-canonical
+    T181_FAULT 17, 13 << 32 | 0, jmp far qword [rel t181_f64_canon]
+    T181_FAULT 18, 11 << 32 | 0x30, call far qword [rel t181_f64_np]
+    T181_FAULT 19, 13 << 32 | 0x10, call far word [rel t181_f16_data]
+    T181_FAULT 20, 11 << 32 | 0x30, jmp far word [rel t181_f16_np]
+    lea r8, [rel t181_f_data]
+    T181_FAULT 24, 13 << 32 | 0x10, call far dword [r8]                    ; REX without W
+    ; the first push of these is on a present page, the second one isn't (PD[255]): nothing
+    ; may be pushed (the #PF handler runs on IST1)
+    mov r13, rsp
+    mov rsp, 0x20000004
+    T181_FAULT 21, 14 << 32 | 2, call far dword [rel t181_p_64]
+    mov rsp, 0x20000008
+    T181_FAULT 22, 14 << 32 | 2, call far qword [rel t181_p64_64]
+    mov rsp, 0x20000002
+    T181_FAULT 23, 14 << 32 | 2, call far word [rel t181_p16_c20]
+    mov rsp, r13
+
+    inc qword [r15 + 193*8]
+    dec dword [abs T181_PASS]
+    jnz t181_pass
+
+    T181_GATE 14, pf_handler, 0
+    xor eax, eax
+    mov [abs 0x6000 + 11*16], rax
+    mov [abs 0x6000 + 11*16 + 8], rax
+    mov [abs 0x6000 + 13*16], rax
+    mov [abs 0x6000 + 13*16 + 8], rax
     jmp t142_back
 
 t151_cow:

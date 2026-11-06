@@ -2674,6 +2674,11 @@ pub unsafe fn instr16_FF_3_mem(addr: u64) {
     // callf
     let new_ip = return_on_pagefault!(safe_read16(addr));
     let new_cs = return_on_pagefault!(safe_read16(addr + 2));
+    if *is_64 {
+        // call far m16:16 (0x66): the return address is pushed on the 64-bit stack
+        far_jump64(new_ip as u64, new_cs, true, 16);
+        return;
+    }
     far_jump(new_ip, new_cs, true, false);
 }
 pub unsafe fn instr16_FF_4_helper(data: i32) {
@@ -2696,6 +2701,11 @@ pub unsafe fn instr16_FF_5_mem(addr: u64) {
     // jmpf
     let new_ip = return_on_pagefault!(safe_read16(addr));
     let new_cs = return_on_pagefault!(safe_read16(addr + 2));
+    if *is_64 {
+        // jmp far m16:16 (0x66)
+        far_jump64(new_ip as u64, new_cs, false, 16);
+        return;
+    }
     far_jump(new_ip, new_cs, false, false);
 }
 pub unsafe fn instr16_FF_6_mem(addr: u64) {

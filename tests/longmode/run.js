@@ -214,6 +214,22 @@ const expected = [
     0xFEDCBA9876543210n, // 178: movdqa xmm0, xmm10 (66 44 0F 7F): high qword
     0x0123456789ABCDEFn, // 179: movdqu xmm11, xmm0 (F3 41 0F 7F): low qword
     0xFEDCBA9876543210n, // 180: movdqu xmm11, xmm0 (F3 41 0F 7F): high qword
+    // 181-191: far call/jmp through a memory far pointer (FF /3, FF /5) in 64-bit mode, see
+    // T181_RESULT: bits 0-15 bytes pushed, 16-31 cs in the target, 32-47 pushed cs, 48 pushed
+    // return address, 56 rsp restored by the retf back
+    0x0101000800180008n, // 181: call m16:32 to compatibility mode, retf
+    0x0000000000180000n, // 182: jmp m16:32 to compatibility mode
+    0x0101000800200008n, // 183: call m16:32 to compatibility mode (cs base 0xF0000), retf
+    0x0001000800080008n, // 184: call m16:32 to 64-bit code, rsp above 4 GiB
+    0x0000000000080000n, // 185: jmp m16:32 to 64-bit code, rsp above 4 GiB
+    0x0001000800200004n, // 186: call m16:16 (66) to compatibility mode
+    0x0000000000200000n, // 187: jmp m16:16 (66) to compatibility mode
+    0x0001000800180010n, // 188: call m16:64 (REX.W) to compatibility mode
+    0x0101000800080010n, // 189: call m16:64 to 64-bit code, rsp above 4 GiB, retfq
+    0x0000000000080000n, // 190: jmp m16:64 to 64-bit code, rsp above 4 GiB
+    0x0000000000180000n, // 191: jmp m16:64 (REX.W) to compatibility mode
+    0x1FFFFFFn,          // 192: far calls/jmps that fault (#GP, #NP, #PF), one bit each
+    3n,                  // 193: passes of 181-192
 ];
 
 const emulator = new V86({

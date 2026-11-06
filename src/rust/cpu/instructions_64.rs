@@ -12,6 +12,7 @@ use crate::cpu::string::{
     cmpsq_no_rep, cmpsq_repnz, cmpsq_repz, insd_no_rep, lodsq_no_rep, lodsq_rep, movsq_no_rep,
     movsq_rep, outsd_no_rep, scasq_no_rep, scasq_repnz, scasq_repz, stosq_no_rep, stosq_rep,
 };
+use crate::paging::OrPageFault;
 use crate::prefix;
 
 pub unsafe fn instr64_01_mem(addr: u64, r: i32) {
@@ -1232,13 +1233,26 @@ pub unsafe fn instr64_FF_2_reg(r1: i32) {
     return_on_pagefault!(push64(get_real_eip64()));
     *instruction_pointer = data;
 }
+/// The far pointer of call/jmp far (FF /3, FF /5) in 64-bit mode: 0xFF dispatches to the 64-bit
+/// handlers without REX.W too (near call/jmp and push default to 64 bits), but far call/jmp
+/// don't: the operand is m16:64 only with REX.W and m16:32 otherwise (the 0x66 form, m16:16, goes
+/// to the 16-bit handlers). Returns the offset, the selector and the operand size
+unsafe fn read_far_pointer64(addr: u64) -> OrPageFault<(u64, i32, u32)> {
+    if rex_w() {
+        Ok((safe_read64s(addr)?, safe_read16(addr + 8)?, 64))
+    }
+    else {
+        Ok((
+            safe_read32s(addr)? as u32 as u64,
+            safe_read16(addr + 4)?,
+            32,
+        ))
+    }
+}
 pub unsafe fn instr64_FF_3_mem(addr: u64) {
-    // call far m16:64
-    let new_rip = return_on_pagefault!(safe_read64s(addr));
-    let new_cs = return_on_pagefault!(safe_read16(addr + 8));
-    return_on_pagefault!(push64(*sreg.offset(CS as isize) as u64));
-    return_on_pagefault!(push64(*instruction_pointer));
-    far_jump64(new_rip, new_cs as i32, false);
+    // call far m16:64 (REX.W) or m16:32
+    let (offset, cs, osize) = return_on_pagefault!(read_far_pointer64(addr));
+    far_jump64(offset, cs, true, osize);
 }
 pub unsafe fn instr64_FF_3_reg(_a0: i32) { trigger_ud(); }
 pub unsafe fn instr64_FF_4_mem(addr: u64) {
@@ -1246,10 +1260,9 @@ pub unsafe fn instr64_FF_4_mem(addr: u64) {
 }
 pub unsafe fn instr64_FF_4_reg(r1: i32) { *instruction_pointer = read_reg64(r1); }
 pub unsafe fn instr64_FF_5_mem(addr: u64) {
-    // jmp far m16:64
-    let new_rip = return_on_pagefault!(safe_read64s(addr));
-    let new_cs = return_on_pagefault!(safe_read16(addr + 8));
-    far_jump64(new_rip, new_cs as i32, false);
+    // jmp far m16:64 (REX.W) or m16:32
+    let (offset, cs, osize) = return_on_pagefault!(read_far_pointer64(addr));
+    far_jump64(offset, cs, false, osize);
 }
 pub unsafe fn instr64_FF_5_reg(_a0: i32) { trigger_ud(); }
 pub unsafe fn instr64_FF_6_mem(addr: u64) {
